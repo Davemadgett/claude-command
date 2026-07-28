@@ -1,0 +1,19 @@
+node_modules/
+web/dist/
+
+# Everything the app generates or caches lives here, and some of it is a
+# provider's index of real client names. Ignore the directory wholesale rather
+# than listing file types — the *.db rules that used to be here were correct as
+# far as they went, and clio_matters.json still slipped through by being JSON.
+data/*
+!data/.gitkeep
+
+# Local configuration: paths on your disk, calendar names, your own name.
+# config.example.json is the committed one.
+config.json
+
+.DS_Store
+*.log
+
+# Compiled by app/build.sh
+bin/

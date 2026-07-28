@@ -1,0 +1,25 @@
+{
+  "name": "claude-command",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "description": "A native Mac kanban board over your Claude Code sessions.",
+  "type": "module",
+  "scripts": {
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "start": "NODE_ENV=production node server/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

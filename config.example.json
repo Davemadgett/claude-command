@@ -1,0 +1,29 @@
+{
+  "_comment": "Copy to config.json and edit. Every key is optional — delete what you don't need. config.json is gitignored.",
+
+  "appName": "Claude Command",
+  "bundleId": "com.example.claudecommand",
+  "principal": "Your Name",
+  "port": 4317,
+
+  "labels": {
+    "_comment": "index: 'folders' reads the list from disk, 'clio' from the Clio API, 'none' switches labels off entirely.",
+    "index": "folders",
+    "root": "~/Projects",
+    "depth": 1,
+    "pattern": null,
+    "noun": "project"
+  },
+
+  "calendars": {
+    "_comment": "Calendars whose events may name a label. Leave empty to switch attribution off.",
+    "work": []
+  },
+
+  "reports": {
+    "_comment": "Optional folder of pre-generated HTML reports to show in the panel. Leave dir null to hide the tab.",
+    "dir": null,
+    "pattern": "^report_(\\d{4}-\\d{2}-\\d{2})\\.html$",
+    "label": "Reports"
+  }
+}
