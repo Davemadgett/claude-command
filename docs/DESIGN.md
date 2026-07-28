@@ -266,7 +266,7 @@ session can start on any board, not only the first.
 |---|---|
 | `downloads` | `~/Downloads` — relative paths read against home, case-insensitively |
 | `~/Desktop` | `~/Desktop` |
-| `02108-Smith` | that label's folder |
+| `01953-Acme` | that label's folder |
 | `file:///Users/you/Downloads` | `~/Downloads` — a Finder drag |
 | `'~/My Folder'`, `~/My\ Folder` | quoting and shell escaping are stripped |
 
@@ -308,12 +308,12 @@ Events often name the label outright: *"Mediation Neutral Selection Deadline
 (01953-Acme)"*. A number counts only when it is a label that actually exists,
 which stops docket numbers, dates and times matching by accident.
 
-> **Rejected twice: matching the client surname.**
-> First attempt tied *"Smith v. Raginski"* to **00164-Smith** — an arbitrary Smith
-> among many. Narrowed to surnames belonging to exactly one label, it then tied
-> that same hearing to **01545-Sullivan**, because the title reads *"Hon. Bridget
-> A. Sullivan"*. It had matched the judge. Event titles are full of judges,
-> opposing parties and venues.
+> **Rejected twice: matching the party name.**
+> First attempt tied *"Acme v. Bolt"* to **00164-Acme** — an arbitrary Acme among
+> many. Narrowed to names belonging to exactly one label, it then tied that same
+> hearing to **01545-Vance**, because the title named the presiding judge, whose
+> surname was also Vance. It had matched the judge. Event titles are full of
+> judges, opposing parties and venues.
 
 **The principle:** an unattributed session is honest. A confidently wrong
 attribution puts a real deadline against the wrong label, or attributes hours to

@@ -270,5 +270,8 @@ anywhere. *Copy as TSV* gives you rows to work from.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Contributions welcome; see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[PolyForm Noncommercial 1.0.0](LICENSE) — free to read, run, modify and share for
+any noncommercial purpose. Using it in a business, including a law practice, is a
+commercial purpose and needs a separate license; open an issue to ask about one.
+
+Contributions welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
