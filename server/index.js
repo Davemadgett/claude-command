@@ -37,7 +37,7 @@ import {
 import { scanSessions, findSession, readTranscript, readSessionFiles, labelFromPath } from './sessions.js';
 import * as term from './pty.js';
 import { listBriefs, readBrief, reportsEnabled } from './brief.js';
-import { config } from './config.js';
+import { config, labelsEnabled } from './config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = config.port;
@@ -247,7 +247,7 @@ function buildBoard(query = {}) {
     });
   }
 
-  // Recomputed after the fact so the Clio link and folder follow the label the
+  // Recomputed after the fact so the link and folder follow the label the
   // card actually ended up with, not the one the transcript alone implied.
   for (const card of cards) {
     card.labelUrl = labelUrl(card.label);
@@ -373,10 +373,16 @@ app.get('/api/config', wrap((_req, res) =>
   res.json({
     appName: config.appName,
     labels: {
-      enabled: config.labels.index !== 'none',
+      enabled: labelsEnabled(),
       noun: config.labels.noun,
     },
     reports: { enabled: reportsEnabled(), label: config.reports.label },
+    /*
+     * Nothing on this board works without Claude Code, and the failure without
+     * it is a spawn error on the first click. Reported here so the UI can say
+     * so plainly instead.
+     */
+    claude: term.claudeStatus(),
   })
 ));
 
@@ -627,7 +633,7 @@ app.post('/api/cards/:sessionId/priority', wrap((req, res) => {
 
 /**
  * Attach a label by hand, or confirm the one the board guessed. Checked against
- * Clio and the folder index so a typo becomes an error rather than a card
+ * the label index and the folder index so a typo becomes an error rather than a card
  * labelled with a label that doesn't exist.
  */
 app.post('/api/cards/:sessionId/label', wrap((req, res) => {
@@ -947,7 +953,7 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`claude-kanban server → http://127.0.0.1:${PORT}`);
+  console.log(`${config.appName} → http://127.0.0.1:${PORT}`);
   startScheduler();
   startReviewWatcher();
   startLabelWatcher();

@@ -123,7 +123,7 @@ export function CardContent({
               href={card.labelUrl}
               target="_blank"
               rel="noreferrer"
-              title={`Open ${card.label} in Clio`}
+              title={`Open ${card.label}`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
@@ -139,7 +139,7 @@ export function CardContent({
         {card.labelFolder && (
           <button
             className="folder-btn"
-            title={`Open the Dropbox folder for ${card.label} in Finder`}
+            title={`Open the folder for ${card.label} in Finder`}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
@@ -162,7 +162,7 @@ export function CardContent({
       <div className="card-title">{card.title}</div>
 
       {/*
-        A guess, not an answer. It came from a surname in what you typed, which is
+        A guess, not an answer. It came from a name in what you typed, which is
         the evidence that has been wrong before — so it sits here as a question
         with two ways out, and never quietly becomes the card's label.
       */}

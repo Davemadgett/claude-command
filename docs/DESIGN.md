@@ -531,11 +531,16 @@ window was added.
 ## 12. Operating it
 
 ```bash
-open "/Applications/Claude Command.app"   # normal use
-./app/build.sh                          # rebuild after any change
-npm run dev                             # hot-reload UI on :5180, API on :4317
+./start.sh                                # browser, no Xcode needed
+open "/Applications/Claude Command.app"   # the Mac app, once built
+./app/build.sh                            # rebuild the app after a Swift change
+npm run dev                               # hot-reload UI on :5180, API on :4317
 SB_REQLOG=/tmp/req.log node server/index.js   # see what a window is asking for
 ```
+
+`start.sh` is the path with no build tools in it: Node installs the deps, Vite
+builds the UI, and the board opens in a browser. The Swift shell and the calendar
+helper are the only pieces that need Xcode, and both are optional.
 
 `app/build.sh` builds the UI, regenerates the icon, compiles the Swift shell and
 the calendar helper, writes `Info.plist`, and ad-hoc signs the bundle.

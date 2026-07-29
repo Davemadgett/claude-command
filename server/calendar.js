@@ -21,8 +21,8 @@ let cache = { at: 0, events: [], error: null, denied: false };
 const WORK_CALENDARS = new Set(config.calendars.work ?? []);
 
 /**
- * Key prefix -> canonical key ("01994" -> "01994-Acme"),
- * built from Clio and the Dropbox folder index so either source can resolve one.
+ * Key prefix -> canonical key ("01994" -> "01994-Acme"), built from both the
+ * label index and the folder index so either source can resolve one.
  */
 function numberIndex() {
   const index = new Map();
@@ -39,7 +39,7 @@ function numberIndex() {
  * Events often name the label outright — "01994-Acme — return signed contract",
  * "Mediation Deadline (01953-Acme)" — so the file number is the signal. A
  * number only counts when it is a label that actually exists, which keeps
- * dates, docket numbers and times from matching by accident.
+ * dates, reference numbers and times from matching by accident.
  */
 function matchLabel(event, index) {
   const haystack = [event.title, event.notes, event.location].filter(Boolean).join(' \n ');
@@ -64,7 +64,9 @@ function load({ days = 21, behind = 1 } = {}) {
     cache = {
       at: Date.now(),
       events: [],
-      error: 'calendar-dump helper is not built (run app/build.sh)',
+      error:
+        'The calendar helper is not built. It needs Swift — run `xcode-select --install`, ' +
+        'then ./start.sh or ./app/build.sh. Everything else works without it.',
       denied: false,
     };
     return cache;

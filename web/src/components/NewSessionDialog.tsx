@@ -5,12 +5,21 @@ import type { ColumnChoice } from '../types';
 
 type Props = {
   defaultColumnId?: string;
+  labelsEnabled: boolean;
+  labelNoun: string;
   onClose: () => void;
   onCreated: (sessionId: string) => void;
   onError: (message: string) => void;
 };
 
-export function NewSessionDialog({ defaultColumnId, onClose, onCreated, onError }: Props) {
+export function NewSessionDialog({
+  defaultColumnId,
+  labelsEnabled,
+  labelNoun,
+  onClose,
+  onCreated,
+  onError,
+}: Props) {
   const [cwd, setCwd] = useState('');
   const [title, setTitle] = useState('');
   const [columns, setColumns] = useState<ColumnChoice[]>([]);
@@ -85,8 +94,9 @@ export function NewSessionDialog({ defaultColumnId, onClose, onCreated, onError 
     if (uri) setCwd(uri.split('\n')[0].trim());
   };
 
-  // Always the picker rather than jumping straight to the Finder panel: searching
-  // labels by number is the fastest way in, and the picker offers Finder anyway.
+  // Always the picker rather than jumping straight to the Finder panel: it
+  // offers recent folders and, where configured, labels — both faster than
+  // walking a tree — and it offers the Finder panel anyway.
   const browse = () => setPicking(true);
 
   return (
@@ -101,8 +111,8 @@ export function NewSessionDialog({ defaultColumnId, onClose, onCreated, onError 
           <div className="field">
             <label>Folder to work in</label>
             <p className="field-help">
-              The folder Claude can read and write. For case work, pick the label — the button below
-              searches every label folder by number or client name.
+              The folder Claude can read and write. Browse for it, drag it in from Finder, or type
+              a path — <code>downloads</code> and <code>~/code/thing</code> both work.
             </p>
             <div className="row">
               <input
@@ -174,6 +184,8 @@ export function NewSessionDialog({ defaultColumnId, onClose, onCreated, onError 
 
       {picking && (
         <FolderPicker
+          labelsEnabled={labelsEnabled}
+          labelNoun={labelNoun}
           initial={cwd || undefined}
           onPick={(p) => {
             setCwd(p);

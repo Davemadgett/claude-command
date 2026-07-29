@@ -24,7 +24,7 @@ export type Card = {
   label: string | null;
   /** How the label was arrived at, weakest last. */
   labelSource?: 'manual' | 'cwd' | 'files' | 'prompt' | null;
-  /** A surname-strength guess waiting on a yes or no. */
+  /** A name-strength guess waiting on a yes or no. */
   labelSuggested?: string | null;
   priority?: Priority;
   labelUrl?: string | null;
@@ -271,4 +271,6 @@ export type AppConfig = {
   appName: string;
   labels: { enabled: boolean; noun: string };
   reports: { enabled: boolean; label: string };
+  /** Whether the `claude` command could be found. Nothing works without it. */
+  claude: { found: boolean; path: string | null };
 };

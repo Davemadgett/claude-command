@@ -10,6 +10,19 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 DEST="${DEST:-/Applications}"
 
+# The only step in the whole project that needs Xcode. Say so plainly, and point
+# at the path that doesn't — the app is a nicer wrapper, not the product.
+if ! command -v swiftc >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+Building the Mac app needs Swift, which comes with the Xcode command line tools:
+
+    xcode-select --install
+
+You don't need it to use this. ./start.sh runs the same board in your browser.
+MSG
+  exit 1
+fi
+
 # node is already a dependency, so use it rather than adding jq.
 read_config() {
   node -e "

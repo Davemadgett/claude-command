@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { BoardTab, Card, Priority } from '../types';
 
+const capitalise = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
 const LEVELS: { value: Priority; label: string }[] = [
   { value: 'high', label: 'High' },
   { value: 'medium', label: 'Medium' },
@@ -21,11 +23,13 @@ type Props = {
   onMoveToBoard: (card: Card, boardId: string) => void;
   onSetPriority: (card: Card, priority: Priority) => void;
   onSetLabel: (card: Card) => void;
+  labelsEnabled: boolean;
+  labelNoun: string;
 };
 
 export function CardMenu({
   card, boards, currentBoardId, x, y, onClose, onRename, onArchive, onDelete, onMoveToBoard,
-  onSetPriority, onSetLabel,
+  onSetPriority, onSetLabel, labelsEnabled, labelNoun,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -57,9 +61,13 @@ export function CardMenu({
       style={{ left: Math.min(x, window.innerWidth - 230), top: Math.min(y, window.innerHeight - 340) }}
     >
       <button onClick={run(() => onRename(card))}>Rename…</button>
-      <button onClick={run(() => onSetLabel(card))}>
-        {card.label ? `Label · ${card.label}` : 'Set label…'}
-      </button>
+      {labelsEnabled && (
+        <button onClick={run(() => onSetLabel(card))}>
+          {card.label
+            ? `${capitalise(labelNoun)} · ${card.label}`
+            : `Set ${labelNoun}…`}
+        </button>
+      )}
 
       <div className="card-menu-label">Priority</div>
       {LEVELS.map((level) => (

@@ -406,10 +406,26 @@ export default function App() {
         )}
       </div>
 
+      {/*
+        Every session on this board is a `claude` process, so without Claude Code
+        the board loads, shows nothing, and fails on the first click with a spawn
+        error. Saying so up front is the difference between a five-minute setup
+        and concluding the thing is broken.
+      */}
+      {appConfig && !appConfig.claude.found && (
+        <div className="notice setup">
+          <strong>Claude Code isn’t installed yet.</strong> This board runs your sessions with the{' '}
+          <code>claude</code> command, and can’t find it. Install it, then run <code>claude</code>{' '}
+          once in a terminal to sign in — the board picks it up on the next reload.
+        </div>
+      )}
+
       {view === 'live' && <LiveView onOpenSession={openSession} onError={setError} />}
       {view === 'calendar' && (
         <CalendarView
           cards={board.cards}
+          labelsEnabled={appConfig?.labels.enabled ?? false}
+          labelNoun={appConfig?.labels.noun ?? 'label'}
           onOpenCard={openSession}
           onCreated={refresh}
           onError={setError}
@@ -417,7 +433,13 @@ export default function App() {
       )}
       {view === 'skills' && <SkillsView onRan={openSession} onError={setError} />}
       {view === 'scheduled' && <ScheduledView onRan={openSession} onError={setError} />}
-      {view === 'time' && <TimeLogView onError={setError} />}
+      {view === 'time' && (
+        <TimeLogView
+          labelsEnabled={appConfig?.labels.enabled ?? false}
+          labelNoun={appConfig?.labels.noun ?? 'label'}
+          onError={setError}
+        />
+      )}
       {view === 'agents' && <AgentsView onError={setError} />}
       {view === 'archive' && <ArchiveView onRestored={refresh} onError={setError} />}
 
@@ -524,6 +546,8 @@ export default function App() {
 
       {menu && (
         <CardMenu
+          labelsEnabled={appConfig?.labels.enabled ?? false}
+          labelNoun={appConfig?.labels.noun ?? 'label'}
           card={menu.card}
           boards={board.boards}
           currentBoardId={board.boardId}
@@ -541,8 +565,10 @@ export default function App() {
           onMoveToBoard={(c, target) => act(() => api.moveCardToBoard(c.sessionId, target))}
           onSetPriority={(c, priority) => act(() => api.setPriority(c.sessionId, priority))}
           onSetLabel={(c) => {
+            const noun = appConfig?.labels.noun ?? 'label';
             const raw = prompt(
-              'Label number for this card — a file number or “01953-Acme”. Leave blank to clear.',
+              `Which ${noun} is this card for? Anything that names one will do. ` +
+                'Leave blank to clear.',
               c.label ?? ''
             );
             if (raw === null) return;
@@ -554,6 +580,8 @@ export default function App() {
       {showNew && (
         <NewSessionDialog
           defaultColumnId={board.columns.find((c) => !c.review_of)?.id}
+          labelsEnabled={appConfig?.labels.enabled ?? false}
+          labelNoun={appConfig?.labels.noun ?? 'label'}
           onClose={() => setShowNew(false)}
           onCreated={(sessionId) => {
             setShowNew(false);

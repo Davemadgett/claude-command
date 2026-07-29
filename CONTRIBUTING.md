@@ -8,9 +8,12 @@ side effect.
 
 ```bash
 npm install
-cp config.example.json config.json     # optional
 npm run dev                            # UI on :5180, API on :4317
 ```
+
+`config.json` is optional and there is deliberately no default one — the board
+has to work without it. If you add a feature that reads config, give it a working
+default and check it still behaves with no `config.json` at all.
 
 `npm run dev` is the fast loop. `./app/build.sh` is only needed when you change
 the Swift shell in `app/` — server and UI changes just need the window reloaded.

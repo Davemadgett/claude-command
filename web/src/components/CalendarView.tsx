@@ -19,6 +19,8 @@ function dayLabel(key: string) {
   return weekday;
 }
 
+const capitalise = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
 function timeLabel(e: CalendarEvent) {
   if (e.allDay) return 'All day';
   return new Date(e.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -26,11 +28,15 @@ function timeLabel(e: CalendarEvent) {
 
 export function CalendarView({
   cards,
+  labelsEnabled,
+  labelNoun,
   onOpenCard,
   onCreated,
   onError,
 }: {
   cards: Card[];
+  labelsEnabled: boolean;
+  labelNoun: string;
   onOpenCard: (sessionId: string) => void;
   onCreated: () => void;
   onError: (m: string) => void;
@@ -40,7 +46,7 @@ export function CalendarView({
   const [denied, setDenied] = useState(false);
   const [asking, setAsking] = useState(false);
   const [days, setDays] = useState(21);
-  const [labelOnly, setLabelOnly] = useState(true);
+  const [labelOnly, setLabelOnly] = useState(labelsEnabled);
   const [busy, setBusy] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
@@ -135,9 +141,12 @@ export function CalendarView({
     <div className="view">
       <h2>Calendar</h2>
       <p className="sub">
-        What is coming up, and the work on your board attached to it. An event is tied to a label
-        when its title carries the file number — the way your firm calendar already writes them.
-        Events that don’t name a number stay unattached rather than being guessed at.
+        What is coming up, and the work on your board attached to it.
+        {labelsEnabled
+          ? ` An event is tied to a ${labelNoun} when its title carries the key — the way a
+             calendar entry usually names the job it is for. Events that don’t name one stay
+             unattached rather than being guessed at.`
+          : ' Turn on labels to have events tie themselves to the work they belong to.'}
       </p>
 
       {denied ? (
@@ -183,10 +192,12 @@ export function CalendarView({
             <option value={60}>60 days</option>
           </select>
         </label>
-        <label className="switch">
-          <input type="checkbox" checked={labelOnly} onChange={(e) => setLabelOnly(e.target.checked)} />
-          Label events only
-        </label>
+        {labelsEnabled && (
+          <label className="switch">
+            <input type="checkbox" checked={labelOnly} onChange={(e) => setLabelOnly(e.target.checked)} />
+            {capitalise(labelNoun)} events only
+          </label>
+        )}
         <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
           {events ? `${shown.length} shown` : ''}
         </span>
@@ -198,7 +209,9 @@ export function CalendarView({
         <div className="pane-empty">
           <div>Nothing scheduled</div>
           <div className="hint">
-            {labelOnly ? 'No label-linked events in this window — untick the filter to see everything.' : 'No events in this window.'}
+            {labelOnly
+              ? `No ${labelNoun}-linked events in this window — untick the filter to see everything.`
+              : 'No events in this window.'}
           </div>
         </div>
       ) : (

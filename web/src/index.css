@@ -18,9 +18,9 @@
   --brand-deep: #065816;
   --live: #22c55e;
   --danger: #f43f5e;
-  --matter-fg: #c4b5fd;
-  --matter-bg: #211c3a;
-  --matter-br: #4c3f7a;
+  --label-fg: #c4b5fd;
+  --label-bg: #211c3a;
+  --label-br: #4c3f7a;
   --lane-bg: #14161f;
   --lane-br: #3a3018;
   --lane-fg: #fbbf24;
@@ -54,9 +54,9 @@
   --brand-deep: #065816;
   --live: #15803d;
   --danger: #dc2626;
-  --matter-fg: #5b21b6;
-  --matter-bg: #f0ebfe;
-  --matter-br: #d6c8fb;
+  --label-fg: #5b21b6;
+  --label-bg: #f0ebfe;
+  --label-br: #d6c8fb;
   --lane-bg: #fdf8ec;
   --lane-br: #e8d9b0;
   --lane-fg: #92650a;
@@ -163,7 +163,7 @@ input:focus, select:focus, textarea:focus {
 .nav button:hover { background: var(--surface); color: var(--text); }
 .nav button.on { background: var(--surface-hi); color: var(--text); border-color: var(--border-hi); }
 
-/* Per-board tabs (Firm / Personal / …). */
+/* Per-board tabs (Work / Personal / …). */
 .board-tabs {
   display: flex; align-items: center; gap: 4px;
   padding: 0 16px; height: var(--h-tabs);
@@ -256,7 +256,7 @@ input:focus, select:focus, textarea:focus {
   padding: 1px 6px; border-radius: 20px; border: 1px solid var(--border-hi); color: var(--text-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;
 }
-.badge.matter { color: var(--matter-fg); border-color: var(--matter-br); background: var(--matter-bg); }
+.badge.label { color: var(--label-fg); border-color: var(--label-br); background: var(--label-bg); }
 .badge.live { color: #86efac; border-color: #16603a; background: #0d2a1c; display: inline-flex; align-items: center; gap: 4px; }
 .badge.live .pulse { width: 5px; height: 5px; border-radius: 50%; background: var(--live); animation: pulse 1.8s ease-in-out infinite; }
 .badge.exited { color: #fda4af; border-color: #6b2436; background: #2a1119; }
@@ -493,7 +493,7 @@ button.badge.prio.unset:hover .dot { border-color: var(--prio-high); background:
 .card-menu button.prio-option .tick { margin-left: auto; color: var(--text-faint); }
 .card-menu button.prio-option.on { color: var(--text); }
 
-/* ------------------------------------------------- matter suggestion -- */
+/* -------------------------------------------------- label suggestion -- */
 
 /* A question the card is asking you, so it reads as unfinished business rather
    than as a fact the board has already decided. */
@@ -502,8 +502,8 @@ button.badge.prio.unset:hover .dot { border-color: var(--prio-high); background:
   font-size: 10.5px; color: var(--text-dim);
 }
 .card-suggest .q {
-  font-weight: 600; color: var(--matter-fg);
-  border: 1px dashed var(--matter-br); background: var(--matter-bg);
+  font-weight: 600; color: var(--label-fg);
+  border: 1px dashed var(--label-br); background: var(--label-bg);
   border-radius: 20px; padding: 1px 7px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -646,7 +646,7 @@ table.tl .day { color: var(--text-faint); font-variant-numeric: tabular-nums; wh
 table.tl .sessions { color: var(--text-faint); font-size: 11.5px; line-height: 1.5; margin-top: 3px; }
 .src { font-size: 9.5px; padding: 1px 5px; border-radius: 20px; border: 1px solid var(--border-hi); color: var(--text-faint); margin-left: 7px; }
 .src.cwd { color: #86efac; border-color: #16603a; }
-.src.manual { color: var(--matter-fg); border-color: var(--matter-br); }
+.src.manual { color: var(--label-fg); border-color: var(--label-br); }
 /* Dashed, because this is the one attribution not backed by work in the folder. */
 .src.prompt { color: var(--prio-med); border-color: var(--prio-med); border-style: dashed; }
 
@@ -693,6 +693,8 @@ table.tl .sessions { color: var(--text-faint); font-size: 11.5px; line-height: 1
   border-radius: var(--radius); padding: 10px 14px; font-size: 12.5px;
   margin-bottom: 16px; line-height: 1.5;
 }
+/* The one-time "you haven't finished installing" banner, above everything. */
+.notice.setup { margin: 12px 16px 0; }
 .notice.permission { display: flex; flex-direction: column; gap: 10px; }
 .notice.permission .permission-actions { display: flex; gap: 8px; align-items: center; }
 .notice.permission .hint { font-size: 11.5px; opacity: 0.8; }
@@ -779,13 +781,13 @@ table.tl td.h.dim { color: var(--text-faint); font-weight: 400; }
   color: var(--text-dim); text-transform: uppercase;
 }
 
-/* Matter numbers deep-link into Clio. */
-a.badge.matter { text-decoration: none; cursor: pointer; }
-a.badge.matter:hover { border-color: var(--brand); color: var(--brand); }
+/* A label badge deep-links into whatever system supplied the label. */
+a.badge.label { text-decoration: none; cursor: pointer; }
+a.badge.label:hover { border-color: var(--brand); color: var(--brand); }
 a.label-link { color: var(--accent); text-decoration: none; }
 a.label-link:hover { text-decoration: underline; }
 
-/* Opens the matter's Dropbox folder in Finder. */
+/* Opens the label's folder in Finder. */
 .folder-btn {
   background: transparent; border: 1px solid var(--border-hi); color: var(--text-faint);
   border-radius: 20px; padding: 2px 6px; line-height: 0; display: inline-flex; align-items: center;

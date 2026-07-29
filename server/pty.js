@@ -35,7 +35,23 @@ function resolveClaude() {
   ];
   for (const c of candidates) if (existsSync(c)) return (claudeBin = c);
 
-  throw new Error('Could not locate the `claude` executable on PATH');
+  throw new Error(
+    'Could not find the `claude` command. Install Claude Code, then run `claude` ' +
+      'once in a terminal to sign in.'
+  );
+}
+
+/**
+ * The same question, asked without consequences — for the setup check the UI
+ * runs at startup. Being told up front beats a stack trace on the first click,
+ * which is the only other way anyone finds out.
+ */
+export function claudeStatus() {
+  try {
+    return { found: true, path: resolveClaude() };
+  } catch {
+    return { found: false, path: null };
+  }
 }
 
 /**

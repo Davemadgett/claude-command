@@ -11,8 +11,8 @@
  *
  * This module also answers "where does label X live on disk" for every index,
  * including the command one. Where the list of labels comes from and where the
- * files are are separate questions, and a Clio user has a local mirror of
- * folders whose names came from a server they will never see.
+ * files are are separate questions: someone whose list arrives from an API still
+ * has a local mirror of folders whose names came from a server it never saw.
  */
 
 import { readdirSync } from 'node:fs';

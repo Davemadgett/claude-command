@@ -2,8 +2,8 @@
   "name": "claude-command",
   "version": "0.1.0",
   "private": false,
-  "license": "MIT",
-  "description": "A native Mac kanban board over your Claude Code sessions.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "description": "A kanban board over your Claude Code sessions.",
   "type": "module",
   "scripts": {
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",

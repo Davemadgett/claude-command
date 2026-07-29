@@ -5,25 +5,35 @@ import type { BrowseResult, CwdSuggestion, LabelFolder } from '../types';
 
 type Source = 'labels' | 'recent' | 'browse';
 
+const capitalise = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
 /**
  * Picking where a session runs, without having to know what a path is.
  *
- * Three ways in, in the order they are actually useful here: a label (which is
- * what nearly every session is about), somewhere you worked recently, or a walk
+ * Up to three ways in: a label, somewhere you worked recently, or a walk
  * through the folders. Inside the Mac app there is a fourth — the real Finder
  * panel — which is better than all of them when you already know where you're
  * going, so it sits at the top.
+ *
+ * Labels are only one of those ways and only when they are configured. Without
+ * them this is still a folder picker, which is the thing it has to be: you
+ * cannot start a session without answering where it runs.
  */
 export function FolderPicker({
+  labelsEnabled,
+  labelNoun,
   initial,
   onPick,
   onClose,
 }: {
+  labelsEnabled: boolean;
+  labelNoun: string;
   initial?: string;
   onPick: (path: string) => void;
   onClose: () => void;
 }) {
-  const [source, setSource] = useState<Source>('labels');
+  const sources: Source[] = labelsEnabled ? ['labels', 'recent', 'browse'] : ['recent', 'browse'];
+  const [source, setSource] = useState<Source>(sources[0]);
   const [query, setQuery] = useState('');
   const [labels, setLabels] = useState<LabelFolder[] | null>(null);
   const [recent, setRecent] = useState<CwdSuggestion[]>([]);
@@ -32,9 +42,10 @@ export function FolderPicker({
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.labelFolders().then(setLabels).catch(() => setLabels([]));
+    if (labelsEnabled) api.labelFolders().then(setLabels).catch(() => setLabels([]));
+    else setLabels([]);
     api.cwds().then(setRecent).catch(() => setRecent([]));
-  }, []);
+  }, [labelsEnabled]);
 
   useEffect(() => {
     searchRef.current?.focus();
@@ -81,8 +92,8 @@ export function FolderPicker({
       <div className="dialog picker" onClick={(e) => e.stopPropagation()}>
         <h2>Choose a folder</h2>
         <p className="sub">
-          This is where Claude will be working — the folder it can read and write in. For case work
-          that's the label's Dropbox folder.
+          This is where Claude will be working — the folder it can read and write in.
+          {labelsEnabled && ` Usually that is the ${labelNoun}'s own folder.`}
         </p>
 
         {hasNative() && (
@@ -92,9 +103,9 @@ export function FolderPicker({
         )}
 
         <div className="picker-tabs">
-          {(['labels', 'recent', 'browse'] as Source[]).map((s) => (
+          {sources.map((s) => (
             <button key={s} className={source === s ? 'on' : ''} onClick={() => setSource(s)}>
-              {s === 'labels' ? 'Labels' : s === 'recent' ? 'Recent' : 'Browse'}
+              {s === 'labels' ? capitalise(`${labelNoun}s`) : s === 'recent' ? 'Recent' : 'Browse'}
             </button>
           ))}
         </div>
@@ -105,15 +116,17 @@ export function FolderPicker({
             className="picker-search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={source === 'labels' ? 'Label number or client name…' : 'Filter…'}
+            placeholder={source === 'labels' ? `Search ${labelNoun}s…` : 'Filter…'}
           />
         )}
 
         {source === 'labels' && (
           <div className="picker-list">
-            {labels === null && <div className="pane-empty">Reading the Clio folder…</div>}
+            {labels === null && <div className="pane-empty">Reading…</div>}
             {labels !== null && filteredLabels.length === 0 && (
-              <div className="pane-empty">Nothing matches “{query}”.</div>
+              <div className="pane-empty">
+                {query ? `Nothing matches “${query}”.` : `No ${labelNoun} folders found.`}
+              </div>
             )}
             {filteredLabels.map((m) => (
               <button key={m.path} className="picker-row" onClick={() => onPick(m.path)}>

@@ -40,7 +40,7 @@ export function SummaryView({ card }: { card: Card }) {
           <p className="summary-links">
             {card.labelUrl && (
               <a className="label-link" href={card.labelUrl} target="_blank" rel="noreferrer">
-                Open {card.label} in Clio →
+                Open {card.label} →
               </a>
             )}
             {card.labelFolder && (
@@ -49,7 +49,7 @@ export function SummaryView({ card }: { card: Card }) {
                 onClick={() => api.openFile(card.labelFolder!).catch(() => {})}
                 title={card.labelFolder}
               >
-                Open the Dropbox folder →
+                Open the folder →
               </button>
             )}
           </p>

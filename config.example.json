@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to config.json and edit. Every key is optional — delete what you don't need. config.json is gitignored.",
+  "_comment": "Copy to config.json and edit. Nothing here is required — with no config.json at all you get a working board with the optional parts switched off. config.json is gitignored.",
 
   "appName": "Claude Command",
   "bundleId": "com.example.claudecommand",
@@ -7,21 +7,32 @@
   "port": 4317,
 
   "labels": {
-    "_comment": "index: 'folders' reads the list from disk, 'clio' from the Clio API, 'none' switches labels off entirely.",
+    "_comment": "Optional. Which piece of work a session is about. Off entirely until 'root' or 'command' is set. index: 'folders' reads the list from disk, 'command' from any program printing JSON, 'none' switches it off outright.",
     "index": "folders",
     "root": "~/Projects",
+    "_depth": "1 → <root>/<label>. 2 → <root>/<group>/<label>, where only the leaf is the label.",
     "depth": 1,
+    "_pattern": "Optional regex the folder name must match, so an 'Admin' folder in the tree doesn't become a label.",
     "pattern": null,
-    "noun": "project"
+    "_noun": "What to call one in the UI: label, project, client, matter, account…",
+    "noun": "project",
+    "_stoplist": "Words that must never be read as a label name — your subagents, your own name.",
+    "stoplist": []
+  },
+
+  "timeLog": {
+    "_comment": "Optional. A program printing hours already recorded somewhere else, so the Time tab can subtract them. See examples/.",
+    "postedCommand": null,
+    "env": {}
   },
 
   "calendars": {
-    "_comment": "Calendars whose events may name a label. Leave empty to switch attribution off.",
+    "_comment": "Optional. Calendars whose events may name a label. Empty means events still show, but are never attributed on their own.",
     "work": []
   },
 
   "reports": {
-    "_comment": "Optional folder of pre-generated HTML reports to show in the panel. Leave dir null to hide the tab.",
+    "_comment": "Optional. A folder of pre-generated HTML reports to show in the panel. Leave dir null to hide the tab.",
     "dir": null,
     "pattern": "^report_(\\d{4}-\\d{2}-\\d{2})\\.html$",
     "label": "Reports"

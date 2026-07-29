@@ -38,11 +38,18 @@ const DEFAULTS = {
    * about" — a client, a case, an account, a product line. Two independent
    * questions, deliberately kept apart:
    *
-   *   index    where the list of valid labels comes from ('folders' | 'clio' | 'none')
+   *   index    where the list of valid labels comes from ('folders' | 'command' | 'none')
    *   root     where the matching folder lives on disk, if anywhere
    *
-   * Keeping them apart is what lets a Clio user take the label list from an API
-   * while still resolving folders on a local Dropbox mirror.
+   * Keeping them apart is what lets someone take the label list from an API
+   * while still resolving folders on a locally synced mirror.
+   *
+   * The whole feature stays switched off until one of them is pointed
+   * somewhere — see labelsEnabled(). An index that exists but is empty is
+   * worse than no index: it puts a label control on every card, a Labels tab
+   * in the folder picker and a label column in the time log, all of which can
+   * only ever say "nothing". Someone who cloned this ten seconds ago should
+   * see a board, not a filing system they never asked for.
    */
   labels: {
     index: 'folders',
@@ -144,7 +151,19 @@ function load() {
 
 export const config = load();
 
-/** True when a label index is configured at all — the UI hides the chip if not. */
+/**
+ * True when labels could actually produce something. The UI hides every label
+ * surface when this is false.
+ *
+ * Note this asks whether a *source* is configured, not whether the index is
+ * non-empty. A configured folder root that happens to be empty today still
+ * counts — you set it up, and the answer arriving tomorrow shouldn't require
+ * the feature to reappear. What it rules out is the default: `folders` with
+ * nowhere to look, which is what an unconfigured install has.
+ */
 export function labelsEnabled() {
-  return config.labels.index !== 'none';
+  const { index, root, command } = config.labels;
+  if (index === 'none') return false;
+  if (index === 'command') return Array.isArray(command) && command.length > 0;
+  return Boolean(root);
 }

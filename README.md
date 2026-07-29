@@ -1,6 +1,6 @@
 # Claude Command
 
-A native Mac app over your Claude Code sessions. Sessions are discovered
+A kanban board over your Claude Code sessions. Sessions are discovered
 automatically from `~/.claude/projects/`; you drag them between columns, and click
 one to either work in it live or read a clean mirror of it.
 
@@ -10,30 +10,46 @@ point, every session in flight is visible at once, and you direct work into
 sessions rather than discovering it inside them. That inversion is what makes
 running several at a time manageable rather than a memory test.**
 
-Requires macOS 12+, Node 20+, and Claude Code.
+## Getting started
+
+You need [Claude Code](https://claude.com/claude-code) — run `claude` once in a
+terminal to sign in — plus Node 20+ and macOS 12+.
 
 ```bash
 git clone https://github.com/Davemadgett/claude-command.git
 cd claude-command
-npm install
-cp config.example.json config.json     # optional; sensible defaults without it
-./app/build.sh                         # builds the UI and the .app
+./start.sh
+```
+
+That installs what it needs, builds the UI, and opens the board in your browser.
+There is nothing to configure: your existing sessions are on it as soon as it
+loads, and **+ New session** starts a fresh one in whatever folder you pick.
+
+### The Mac app
+
+`./app/build.sh` puts the same board in a real app — its own Dock icon, its own
+window, the native Finder panel in the folder picker, and calendar access. It
+needs Swift, from the Xcode command line tools (`xcode-select --install`).
+
+```bash
+./app/build.sh
 open "/Applications/Claude Command.app"
 ```
+
+The app owns its server: launching starts `node server/index.js`, quitting stops
+it. If a server is already running (say you ran `./start.sh` in a terminal), the
+app attaches to that one and leaves it alone when it quits.
 
 For development, `npm run dev` gives a hot-reloading UI on `:5180` with the API
 on `:4317`. Changing the server or the UI needs no app rebuild — quit and reopen
 the app, or just reload the window. Only `app/build.sh` rebuilds the Swift shell.
 
-The app owns its server: launching starts `node server/index.js`, quitting stops
-it. If a server is already running (say you started `npm run dev` in a terminal),
-the app attaches to that one and leaves it alone when it quits.
-
 ## Configuration
 
 Everything specific to your machine lives in `config.json`, which is gitignored.
-There is no required key — delete anything you do not need, or skip the file
-entirely and get a working board with the optional integrations switched off.
+**No key is required**, and there is no `config.json` in a fresh clone — the
+board works without one, with the optional parts switched off. Copy
+`config.example.json` when you want to turn something on.
 
 ```json
 {
@@ -56,9 +72,19 @@ mark follow `appName`.
 
 ## Labels
 
+**Labels are off until you switch them on, and everything above works without
+them.** Skip this section entirely if you just want the board.
+
 A label is the optional answer to *which piece of work is this session about* —
 a client, a case, an account, a product line. Cards show it, the time log groups
-by it, and the calendar matches events against it.
+by it, and the calendar matches events against it. Turning it on is one line:
+
+```json
+{ "labels": { "root": "~/Projects", "noun": "project" } }
+```
+
+Every subfolder of `root` is now a label, and a session started in one is
+labelled by it. Nothing else is required.
 
 Two independent questions, deliberately kept apart:
 
@@ -131,7 +157,7 @@ Set one by hand from the card's **⋯** menu — `1953`, `01953` and `01953-Acme
 name the same label, and anything matching nothing is refused rather than guessed
 at. A label you set yourself outranks every inference.
 
-## The five sections
+## The sections
 
 **Board** — your sessions as cards. Fills the screen; scroll down for the session
 panel. Cards stay deliberately spare — status, label, priority, title, and a way
@@ -165,8 +191,14 @@ and invokes the skill there, so you can watch it and answer its prompts.
 *Auto* runs it at its time, but only while the app is open, and a missed day is
 never backfilled. Nothing runs unless you switch it on.
 
-**Time** — working hours reconstructed from your sessions, grouped by label and
-day. See "Time log" below, because how it decides matters.
+**Live** — only the sessions running right now, for when the board is long.
+
+**Calendar** — what is coming up, and the work on your board attached to it. Mac
+app only; it needs the Swift helper.
+
+**Time** — working hours reconstructed from your sessions, grouped by folder — or
+by label, if you turned those on. See "Time log" below, because how it decides
+matters.
 
 **Team** — the agents in `~/.claude/agents`, as an org chart and a roster.
 Reporting lines are read from each agent's own brief: an agent sits under another
@@ -233,6 +265,9 @@ everything before "it's back with you" is one pile.
 
 Consecutive activity in a transcript counts as working time; a gap longer than the
 idle threshold does not. Hours round up to the tenth, the way billing systems do.
+
+Without labels this is hours per folder per day, which is worth having on its
+own. The rest of this section is what labels add.
 
 Attribution is deliberately conservative, and every row says which rule produced
 it. A label you attached to the card by hand comes first, then the session's
