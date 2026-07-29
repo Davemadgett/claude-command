@@ -25,6 +25,10 @@ That installs what it needs, builds the UI, and opens the board in your browser.
 There is nothing to configure: your existing sessions are on it as soon as it
 loads, and **+ New session** starts a fresh one in whatever folder you pick.
 
+**[docs/SETUP.md](docs/SETUP.md) is the full guide** — every configuration key,
+a walkthrough for connecting Clio or any other system, and a troubleshooting
+section. Nothing in it is required to use the board.
+
 ### The Mac app
 
 `./app/build.sh` puts the same board in a real app — its own Dock icon, its own
@@ -113,7 +117,8 @@ A `command` prints:
 rather than thrown. The result is cached to disk and refreshed in the background,
 so a slow or broken command never blocks the board — it keeps serving the last
 good copy. There are two worked examples in [`examples/`](examples/), both
-talking to Clio, both about forty lines.
+talking to Clio, both runnable with nothing but a token and the standard
+library. [docs/SETUP.md](docs/SETUP.md#7-connecting-clio) walks that through.
 
 Credentials go in `labels.env`, which `config.json` being gitignored makes safe:
 
@@ -121,7 +126,7 @@ Credentials go in `labels.env`, which `config.json` being gitignored makes safe:
 "labels": {
   "index": "command",
   "command": ["/usr/bin/python3", "/path/to/examples/clio-labels.py"],
-  "env": { "CLIO_USER_ID": "1234567" }
+  "env": { "CLIO_ACCESS_TOKEN": "…" }
 }
 ```
 

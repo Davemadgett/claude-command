@@ -4,7 +4,8 @@
 This is what `timeLog.postedCommand` expects. Point config.json at it:
 
     "timeLog": {
-      "postedCommand": ["/usr/bin/python3", "/path/to/examples/clio-posted-hours.py"]
+      "postedCommand": ["/usr/bin/python3", "/path/to/examples/clio-posted-hours.py"],
+      "env": { "CLIO_ACCESS_TOKEN": "…", "CLIO_USER_ID": "1234567" }
     }
 
 It is called with two arguments, a start and an end date (YYYY-MM-DD), and
@@ -17,14 +18,63 @@ and only affect display. The Time tab subtracts these hours from the ones it
 reconstructs from transcripts, so what is left is work not yet written down
 anywhere — which is the only part worth looking at.
 
-Set CLIO_USER_ID to your own user, and CLIO_ASSISTANT if your client lives
-somewhere other than ~/code/clio-assistant.
+Nothing here writes to Clio. The board never posts time; it only ever reads,
+compares, and shows you the difference.
+
+CLIO_USER_ID is your own user id — without it this would report the whole
+firm's time as though it were yours. Find it at /api/v4/users/who_am_i.json.
+Set CLIO_REGION if you are not on the US instance: eu, ca or au.
 """
 import json
 import os
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
-sys.path.insert(0, os.path.expanduser(os.environ.get("CLIO_ASSISTANT", "~/code/clio-assistant")))
+TIMEOUT = 30
+
+
+def base_url() -> str:
+    region = (os.environ.get("CLIO_REGION") or "").strip().lower()
+    host = f"{region}.app.clio.com" if region in {"eu", "ca", "au"} else "app.clio.com"
+    return f"https://{host}/api/v4"
+
+
+def get_all(url: str, token: str) -> list:
+    """Every page of a Clio collection — see the note in clio-labels.py."""
+    out: list = []
+    while url:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            payload = json.load(resp)
+        out.extend(payload.get("data") or [])
+        url = ((payload.get("meta") or {}).get("paging") or {}).get("next")
+    return out
+
+
+def from_api(token: str, user_id: str, date_from: str, date_to: str) -> list:
+    query = urllib.parse.urlencode(
+        {
+            "fields": "id,date,quantity,note,billed,non_billable,matter{display_number,description}",
+            "type": "TimeEntry",
+            "user_id": user_id,
+            "start_date": date_from,
+            "end_date": date_to,
+            "limit": 200,
+        }
+    )
+    return get_all(f"{base_url()}/activities.json?{query}", token)
+
+
+def from_local_client(user_id: str, date_from: str, date_to: str) -> list:
+    """Fallback for anyone who already has a configured Clio client on disk."""
+    sys.path.insert(0, os.path.expanduser(os.environ.get("CLIO_ASSISTANT", "~/code/clio-assistant")))
+    from clio_client import Clio  # noqa: E402
+
+    return Clio().list_time_entries(
+        user_id=int(user_id), date_from=date_from, date_to=date_to, limit=1000
+    )
 
 
 def main() -> int:
@@ -39,17 +89,21 @@ def main() -> int:
         print(json.dumps({"error": "set CLIO_USER_ID to the user whose time to read"}))
         return 1
 
-    try:
-        from clio_client import Clio
-    except Exception as exc:
-        print(json.dumps({"error": f"clio_client unavailable: {exc}"}))
-        return 1
+    token = os.environ.get("CLIO_ACCESS_TOKEN")
 
     try:
-        client = Clio()
-        entries = client.list_time_entries(
-            user_id=int(user_id), date_from=date_from, date_to=date_to, limit=1000
+        entries = (
+            from_api(token, user_id, date_from, date_to)
+            if token
+            else from_local_client(user_id, date_from, date_to)
         )
+    except urllib.error.HTTPError as exc:
+        hint = " — the token may have expired" if exc.code in (401, 403) else ""
+        print(json.dumps({"error": f"Clio returned {exc.code}{hint}"}))
+        return 1
+    except ImportError:
+        print(json.dumps({"error": "set CLIO_ACCESS_TOKEN in timeLog.env — see docs/SETUP.md"}))
+        return 1
     except Exception as exc:
         print(json.dumps({"error": f"Clio request failed: {exc}"}))
         return 1
