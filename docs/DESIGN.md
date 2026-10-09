@@ -738,6 +738,24 @@ reshapes are keyed on a `settings` flag so they never fight a later manual edit.
 
 ---
 
+### 9.9 Never walk a cloud mount on the event loop (2026-10-09)
+
+The label-folder index (`providers/folders.js`) used to `readdirSync` the
+labels root — the Clio tree on Dropbox — every ten minutes, on the label
+watcher's timer. On srv1 one matter folder was a cloud-only placeholder whose
+`open()` never returned: the main thread sat in the kernel at 0 % CPU, every
+request timed out, SIGTERM was ignored, and only `kill -9` ended it. It looked
+like an app problem (it struck a few minutes after the window attached) and was
+not one. Node's `--trace-sync-io` found it: the last sync call logged before the
+silence was `walk()` in `folders.js`.
+
+The walk now runs in a child process (`folders-walk.js`) that streams leaves as
+it finds them; the parent keeps whatever arrived when the 20-second clock runs
+out, merges it over the previous index, and tries again at the next refresh.
+Callers still get a `Map` synchronously — the last good one. The same hazard
+remains in `sessions.js`'s mtime sweep of a session's cwd, which is bounded by
+depth and count but not by time.
+
 ## 10. Server modules
 
 | Module | Responsibility |

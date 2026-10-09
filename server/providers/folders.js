@@ -15,55 +15,99 @@
  * has a local mirror of folders whose names came from a server it never saw.
  */
 
-import { readdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from '../config.js';
+
+/*
+ * The walk runs in a child process, never on the event loop. A folder under a
+ * cloud mount (Dropbox, iCloud, OneDrive via the file provider) can be a
+ * placeholder whose `open()` blocks in the kernel until the provider fetches it
+ * — and on a machine where that fetch never completes, a readdirSync on the
+ * server's thread stopped the whole board: every request timed out, SIGTERM was
+ * ignored, and only kill -9 worked. (srv1, 2026-10-09: the label watcher's
+ * 30-second tick walked the Clio root and hit one such matter folder.)
+ *
+ * So: the child streams leaves as it finds them; the parent keeps whatever has
+ * arrived when the clock runs out, merges it over the previous index, and tries
+ * again at the next refresh. Callers still get a Map synchronously — the last
+ * good one — which is the right answer for an index that changes a few times a
+ * week.
+ */
+const WALK = fileURLToPath(new URL('./folders-walk.js', import.meta.url));
+const WALK_TIMEOUT_MS = 20_000;
 
 let folders = new Map();
 let builtAt = 0;
+let refreshing = null;
+let warned = false;
 const MAX_AGE_MS = 10 * 60_000;
 
-function leafAccepted(name) {
-  const pattern = config.labels.pattern;
-  if (!pattern) return true;
-  try {
-    return new RegExp(pattern).test(name);
-  } catch {
-    return true; // a broken pattern should not silently hide every label
-  }
-}
-
-function walk(dir, remaining, out) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return; // unreadable, unmounted, or permission-denied — not fatal
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    const path = join(dir, entry.name);
-    if (remaining === 1) {
-      if (leafAccepted(entry.name)) out.set(entry.name, path);
-    } else {
-      walk(path, remaining - 1, out);
-    }
-  }
-}
-
-function build() {
-  const next = new Map();
+function refresh() {
+  if (refreshing) return;
   const root = config.labels.root;
-  if (root) walk(root, Math.max(1, Number(config.labels.depth) || 1), next);
-  folders = next;
-  builtAt = Date.now();
+  if (!root) {
+    folders = new Map();
+    builtAt = Date.now();
+    return;
+  }
+  const depth = Math.max(1, Number(config.labels.depth) || 1);
+  const next = new Map();
+  let buf = '';
+  let done = false;
+
+  const child = spawn(process.execPath, [WALK, root, String(depth), config.labels.pattern || ''], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  refreshing = child;
+
+  const finish = (complete) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    if (!complete) {
+      child.kill('SIGKILL');
+      if (!warned) {
+        console.error(
+          `label folders: walking ${root} did not finish in ${WALK_TIMEOUT_MS / 1000}s — ` +
+            `a cloud-only folder that never materializes? Keeping the ${next.size} found so far` +
+            (folders.size ? ' over the previous index.' : '.')
+        );
+        warned = true;
+      }
+      for (const [key, path] of folders) if (!next.has(key)) next.set(key, path);
+    }
+    folders = next;
+    builtAt = Date.now();
+    refreshing = null;
+  };
+
+  const timer = setTimeout(() => finish(false), WALK_TIMEOUT_MS);
+  timer.unref?.();
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      const tab = line.indexOf('\t');
+      if (tab > 0) next.set(line.slice(0, tab), line.slice(tab + 1));
+    }
+  });
+  child.on('error', () => finish(false));
+  child.on('close', (code) => finish(code === 0));
 }
 
 function fresh() {
-  if (!builtAt || Date.now() - builtAt > MAX_AGE_MS) build();
+  if (!builtAt || Date.now() - builtAt > MAX_AGE_MS) refresh();
   return folders;
 }
+
+// Start the first walk now, so the index is usually ready before the first
+// request rather than empty for it.
+refresh();
 
 /** Label key -> absolute folder path. */
 export function labelFolders() {
