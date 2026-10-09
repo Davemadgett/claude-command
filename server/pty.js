@@ -2,42 +2,69 @@ import pty from 'node-pty';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { DEFAULT_ENGINE, ENGINES, configuredBin, engine as engineFor } from './engines.js';
 
 const MAX_BUFFER = 400 * 1024; // replayed to a client when it (re)attaches
 
 /** sessionId -> Term */
 const terms = new Map();
 
-let claudeBin = null;
+/** engine id -> absolute path, once found. */
+const bins = new Map();
 
 /**
- * The server may be started by launchd or a bare shell, neither of which has the
- * login PATH, so fall back to asking an interactive-login zsh where `claude` is.
+ * Where an engine's command actually is.
+ *
+ * The server may be started by launchd, by the app bundle, or by a bare shell,
+ * and none of those has the PATH a terminal does — so asking a login shell comes
+ * first, and a list of well-known locations second.
+ *
+ * A shell *alias* is the case the login shell misses, and it is not exotic: the
+ * ChatGPT desktop app ships the Codex CLI inside its bundle, and the usual way
+ * people reach it is an `alias codex=…` line in .zshrc, which a non-interactive
+ * shell never reads and a spawned process could not execute anyway. That bundle
+ * path is in the candidate list for exactly that reason. Anything stranger is
+ * what `engines.<id>.bin` in config.json is for.
  */
-function resolveClaude() {
-  if (claudeBin) return claudeBin;
+function resolveBin(engineId) {
+  const hit = bins.get(engineId);
+  if (hit) return hit;
+
+  const spec = engineFor(engineId);
+  const configured = configuredBin(spec.id);
+  if (configured) {
+    if (!existsSync(configured)) {
+      throw new Error(`config.json points ${spec.name} at ${configured}, which does not exist.`);
+    }
+    bins.set(spec.id, configured);
+    return configured;
+  }
 
   try {
-    const found = execFileSync('/bin/zsh', ['-lc', 'command -v claude'], {
+    const found = execFileSync('/bin/zsh', ['-lc', `command -v ${spec.bin}`], {
       encoding: 'utf8',
       timeout: 8000,
     }).trim();
-    if (found && existsSync(found)) return (claudeBin = found);
+    // An alias resolves to its definition rather than a path; only a real
+    // executable counts.
+    if (found.startsWith('/') && existsSync(found)) {
+      bins.set(spec.id, found);
+      return found;
+    }
   } catch {
     /* fall through to the well-known locations */
   }
 
-  const candidates = [
-    `${homedir()}/.local/bin/claude`,
-    `${homedir()}/.claude/local/claude`,
-    '/opt/homebrew/bin/claude',
-    '/usr/local/bin/claude',
-  ];
-  for (const c of candidates) if (existsSync(c)) return (claudeBin = c);
+  for (const c of spec.candidates) {
+    if (existsSync(c)) {
+      bins.set(spec.id, c);
+      return c;
+    }
+  }
 
   throw new Error(
-    'Could not find the `claude` command. Install Claude Code, then run `claude` ' +
-      'once in a terminal to sign in.'
+    `Could not find the \`${spec.bin}\` command. Install ${spec.name}, then run ` +
+      `\`${spec.bin}\` once in a terminal to sign in.`
   );
 }
 
@@ -46,12 +73,21 @@ function resolveClaude() {
  * runs at startup. Being told up front beats a stack trace on the first click,
  * which is the only other way anyone finds out.
  */
-export function claudeStatus() {
+export function engineStatus(engineId) {
   try {
-    return { found: true, path: resolveClaude() };
+    return { found: true, path: resolveBin(engineId) };
   } catch {
     return { found: false, path: null };
   }
+}
+
+/** Every engine, said the same way, for /api/config. */
+export function enginesStatus() {
+  return ENGINES.map((e) => ({ id: e.id, name: e.name, ...engineStatus(e.id) }));
+}
+
+export function claudeStatus() {
+  return engineStatus(DEFAULT_ENGINE);
 }
 
 /**
@@ -66,6 +102,12 @@ function cleanEnv() {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.startsWith('CLAUDE_CODE_') || key === 'CLAUDECODE' || key === 'CLAUDE_PID' || key === 'CLAUDE_EFFORT') {
+      delete env[key];
+    }
+    // The same trap on the Codex side: a sandbox marker inherited from a parent
+    // agent makes the child believe it is already inside one. `CODEX_HOME` is
+    // config, not a marker, and survives.
+    if (key.startsWith('CODEX_SANDBOX') || key === 'CODEX_THREAD_ID' || key === 'CODEX_SESSION_ID') {
       delete env[key];
     }
   }
@@ -93,6 +135,7 @@ export function liveTerms() {
     .filter((t) => !t.exited)
     .map((t) => ({
       sessionId: t.sessionId,
+      engine: t.engine,
       cwd: t.cwd,
       pid: t.pid,
       mode: t.mode,
@@ -108,20 +151,81 @@ export function getTerm(sessionId) {
 }
 
 /**
- * Start a board-owned Claude session.
- *   mode 'new'    — fresh conversation pinned to a session id we choose
- *   mode 'resume' — take over an existing transcript, keeping its id (and card)
+ * Resident memory per pid, in bytes.
+ *
+ * Every open session is a real agent process holding a real conversation in
+ * memory, and a board left running for a week accumulates dozens of them. The
+ * wall says how many; without this it can't say what they cost, which is the
+ * number that makes closing them an obvious thing to do.
+ *
+ * One `ps` for the whole set, and best-effort: a machine that answers oddly
+ * loses the column, not the wall.
  */
-export function startTerm({ sessionId, cwd, mode = 'new', cols = 120, rows = 32, extraArgs = [] }) {
+export function rssByPid(pids) {
+  const out = new Map();
+  if (!pids.length) return out;
+  try {
+    const text = execFileSync('/bin/ps', ['-o', 'pid=,rss=', '-p', pids.join(',')], {
+      encoding: 'utf8',
+      timeout: 5000,
+      // A pid that died between listing and asking makes ps complain; that is a
+      // missing memory figure, not something worth printing in the server log.
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const line of text.split('\n')) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+      if (m) out.set(Number(m[1]), Number(m[2]) * 1024); // ps reports KiB
+    }
+  } catch {
+    /* no memory column this time */
+  }
+  return out;
+}
+
+/**
+ * How an engine is told what conversation to be.
+ *
+ * Claude Code takes the id, so `new` pins the transcript to the id the board
+ * chose and `resume` names the same one. Codex names its own thread and has no
+ * equivalent flag, so `new` says nothing at all and `resume` needs the thread id
+ * the board recorded after the fact — which is why `resumeId` is a parameter
+ * rather than being assumed to equal the session id.
+ */
+function argsFor(engineId, { sessionId, mode, resumeId, extraArgs }) {
+  if (engineId === 'codex') {
+    return mode === 'resume' && resumeId ? ['resume', resumeId, ...extraArgs] : [...extraArgs];
+  }
+  return mode === 'resume'
+    ? ['--resume', sessionId, ...extraArgs]
+    : ['--session-id', sessionId, ...extraArgs];
+}
+
+/**
+ * Start a board-owned session.
+ *   mode 'new'    — a fresh conversation
+ *   mode 'resume' — take over an existing one, keeping its card
+ *
+ * `resumeId` is what the engine calls the conversation, which is the session id
+ * for Claude and the recorded codex thread for Codex. Callers that don't know
+ * the difference can leave it out and get the session id.
+ */
+export function startTerm({
+  sessionId,
+  cwd,
+  mode = 'new',
+  cols = 120,
+  rows = 32,
+  extraArgs = [],
+  engine = DEFAULT_ENGINE,
+  resumeId = null,
+}) {
   const existing = terms.get(sessionId);
   if (existing && !existing.exited) return existing;
 
-  const bin = resolveClaude();
+  const spec = engineFor(engine);
+  const bin = resolveBin(spec.id);
   const workdir = cwd && existsSync(cwd) ? cwd : homedir();
-  const args =
-    mode === 'resume'
-      ? ['--resume', sessionId, ...extraArgs]
-      : ['--session-id', sessionId, ...extraArgs];
+  const args = argsFor(spec.id, { sessionId, mode, resumeId: resumeId || sessionId, extraArgs });
 
   const p = pty.spawn(bin, args, {
     name: 'xterm-256color',
@@ -138,6 +242,7 @@ export function startTerm({ sessionId, cwd, mode = 'new', cols = 120, rows = 32,
 
   const term = {
     sessionId,
+    engine: spec.id,
     cwd: workdir,
     mode,
     pid: p.pid,
@@ -180,7 +285,16 @@ export function attach(sessionId, ws) {
   if (!term) return false;
 
   term.clients.add(ws);
-  ws.send(JSON.stringify({ t: 'attached', sessionId, cols: term.cols, rows: term.rows, mode: term.mode }));
+  ws.send(
+    JSON.stringify({
+      t: 'attached',
+      sessionId,
+      cols: term.cols,
+      rows: term.rows,
+      mode: term.mode,
+      engine: term.engine,
+    })
+  );
   if (term.buffer) ws.send(JSON.stringify({ t: 'data', d: term.buffer }));
   if (term.exited) ws.send(JSON.stringify({ t: 'exit', code: term.exitCode }));
 

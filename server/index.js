@@ -11,17 +11,26 @@ import { fileURLToPath } from 'node:url';
 import {
   listColumns, listCards, ensureCard, moveCard, updateCard,
   createManualCard, deleteCard, getCard, attachSession,
-  archiveCard, restoreCard, listArchivedCards,
+  archiveCard, restoreCard, listArchivedCards, snoozeCard, wakeDueCards,
   setPriority, setCardLabel, dismissCardLabel, PRIORITIES,
-  createColumn, updateColumn, deleteColumn, reorderColumns,
+  createColumn, updateColumn, deleteColumn, reorderColumns, reorderBoards,
   listBoards, defaultBoardId, createBoard, renameBoard, deleteBoard, moveCardToBoard,
+  setBoardDefaultLabel, applyBoardDefaults,
+  countCardsOnBoard, UNSORTED_BOARD,
   listRoutines, createRoutine, updateRoutine, deleteRoutine,
   createReviewLane, removeReviewLane,
   getSetting, setSetting,
+  codexAliases,
 } from './db.js';
+import { currentEngine, engine as engineFor, isEngine, setCurrentEngine } from './engines.js';
+import { adoptCodexSession } from './adopt.js';
+import { claimThread } from './codex.js';
 import { listSkills } from './skills.js';
 import { listAgents } from './agents.js';
 import { buildTimeLog } from './timelog.js';
+import { buildUsage } from './usage.js';
+import { getLimits } from './limits.js';
+import { buildHistory } from './history.js';
 import { runRoutine, isDue, startScheduler } from './routines.js';
 import { startReviewWatcher } from './review.js';
 import { noteResume, clearResume, effectiveActivity } from './resume.js';
@@ -36,7 +45,16 @@ import {
 } from './calendar.js';
 import { scanSessions, findSession, readTranscript, readSessionFiles, labelFromPath } from './sessions.js';
 import * as term from './pty.js';
-import { listBriefs, readBrief, reportsEnabled } from './brief.js';
+import { listBriefs, readBrief, reportsEnabled, runEnabled, briefRun, startBriefRun } from './brief.js';
+import {
+  billingEnabled,
+  billingSummary,
+  approveEnabled,
+  approveDrafts,
+  billingRunEnabled,
+  billingRun,
+  startBillingRun,
+} from './billing.js';
 import { config, labelsEnabled } from './config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -56,10 +74,13 @@ if (process.env.SB_REQLOG) {
 app.use(express.json({ limit: '1mb' }));
 
 const wrap = (fn) => (req, res) => {
+  const fail = (err) => res.status(400).json({ error: err.message });
   try {
-    fn(req, res);
+    // Handlers are mostly synchronous; the async ones would otherwise reject
+    // into an unhandled rejection and leave the request hanging.
+    Promise.resolve(fn(req, res)).catch(fail);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    fail(err);
   }
 };
 
@@ -146,6 +167,7 @@ function buildBoard(query = {}) {
     const hit = labelFromPath(row.cwd);
     byId.set(row.session_id, {
       sessionId: row.session_id,
+      engine: row.engine || null,
       path: null,
       project: hit?.label || (row.cwd ? row.cwd.split('/').pop() : '—'),
       cwd: row.cwd,
@@ -198,6 +220,7 @@ function buildBoard(query = {}) {
     if (!t && !live.has(id) && !rows.get(id)?.manual) continue;
     byId.set(id, {
       sessionId: id,
+      engine: t?.engine || rows.get(id)?.engine || null,
       path: null,
       project: t?.cwd ? t.cwd.split('/').pop() : '—',
       cwd: t?.cwd || rows.get(id)?.cwd || null,
@@ -214,7 +237,12 @@ function buildBoard(query = {}) {
 
   const cards = [];
   for (const s of byId.values()) {
-    const row = rows.get(s.sessionId) || ensureCard(s.sessionId, { cwd: s.cwd });
+    // A session the board merely found gets its card here — and that is also
+    // where a Codex thread started in some other terminal picks up the engine
+    // and thread id that let this board reopen it later.
+    const row =
+      rows.get(s.sessionId) ||
+      ensureCard(s.sessionId, { cwd: s.cwd, engine: s.engine, engineThread: s.engineThread });
     if (!row) continue;
     if (row.archived && !prefs.includeArchived) continue;
     if (!inBoard.has(row.column_id)) continue; // lives on another board
@@ -224,6 +252,7 @@ function buildBoard(query = {}) {
     const attached = attachedLabel(s, row);
     cards.push({
       ...s,
+      engine: s.engine || row.engine || null,
       label: attached.label,
       client: attached.client,
       labelSource: attached.source,
@@ -239,6 +268,7 @@ function buildBoard(query = {}) {
       customTitle: Boolean(row.title),
       notes: row.notes || '',
       archived: Boolean(row.archived),
+      wakeAt: row.wake_at || null,
       pinned: Boolean(row.pinned),
       manual: Boolean(row.manual),
       live: live.has(s.sessionId),
@@ -256,7 +286,17 @@ function buildBoard(query = {}) {
   }
 
   cards.sort((a, b) => a.position - b.position);
-  return { boards, boardId, columns, cards, prefs, caffeinated: isCaffeinated() };
+  // Counted on every board, not just the one open, because the whole point of
+  // Unsorted is to tell you something arrived on a tab you are not looking at.
+  return {
+    boards,
+    boardId,
+    columns,
+    cards,
+    prefs,
+    unsorted: countCardsOnBoard(UNSORTED_BOARD),
+    caffeinated: isCaffeinated(),
+  };
 }
 
 app.get('/api/board', wrap((req, res) => res.json(buildBoard(req.query))));
@@ -265,32 +305,40 @@ app.get('/api/board', wrap((req, res) => res.json(buildBoard(req.query))));
  * Running sessions, for the live wall. Kept separate from the board so the wall
  * can poll quickly without reassembling columns and cards each time.
  */
+/**
+ * Working or waiting, decided from the transcript rather than the terminal.
+ * The TUI repaints constantly, so PTY silence never happens; the transcript
+ * only grows when something real occurs. Claude owes you a reply unless it
+ * spoke last and has since gone quiet.
+ *
+ * A session with no transcript has never been given anything to do: it is
+ * booting for the first few seconds, and sitting at its prompt after that.
+ * When Claude owes a reply it is working — but not indefinitely: a session
+ * interrupted mid-turn would otherwise claim to be working forever.
+ */
+function liveActivity(t, known, now = Date.now()) {
+  const lastActivity = known?.lastActivity ? Date.parse(known.lastActivity) : null;
+  const idleMs = lastActivity ? now - lastActivity : now - Date.parse(t.startedAt);
+  const owesReply = known && known.lastEventType !== 'assistant';
+  const working = known
+    ? (owesReply ? idleMs < 5 * 60_000 : idleMs < 10_000)
+    : idleMs < 20_000;
+  return { working, idleMs };
+}
+
 app.get('/api/live', wrap((_req, res) => {
   const rows = new Map(listCards().map((c) => [c.session_id, c]));
   const now = Date.now();
 
-  const live = term.liveTerms().map((t) => {
+  const terms = term.liveTerms();
+  const rss = term.rssByPid(terms.map((t) => t.pid).filter(Boolean));
+
+  const live = terms.map((t) => {
     const known = findSession(t.sessionId);
     const row = rows.get(t.sessionId);
     const label = known?.label ?? labelFromPath(t.cwd)?.label ?? null;
 
-    /*
-     * Working or waiting, decided from the transcript rather than the terminal.
-     * The TUI repaints constantly, so PTY silence never happens; the transcript
-     * only grows when something real occurs. Claude owes you a reply unless it
-     * spoke last and has since gone quiet.
-     */
-    const lastActivity = known?.lastActivity ? Date.parse(known.lastActivity) : null;
-    const idleMs = lastActivity ? now - lastActivity : now - Date.parse(t.startedAt);
-
-    // A session with no transcript has never been given anything to do: it is
-    // booting for the first few seconds, and sitting at its prompt after that.
-    // When Claude owes a reply it is working — but not indefinitely: a session
-    // interrupted mid-turn would otherwise claim to be working forever.
-    const owesReply = known && known.lastEventType !== 'assistant';
-    const working = known
-      ? (owesReply ? idleMs < 5 * 60_000 : idleMs < 10_000)
-      : idleMs < 20_000;
+    const { working, idleMs } = liveActivity(t, known, now);
 
     return {
       ...t,
@@ -300,11 +348,37 @@ app.get('/api/live', wrap((_req, res) => {
       project: known?.project ?? (t.cwd ? t.cwd.split('/').pop() : '—'),
       working,
       idleMs,
+      rssBytes: rss.get(t.pid) ?? null,
       reactivated: known ? effectiveActivity(known).reactivated : false,
     };
   });
 
-  res.json({ sessions: live });
+  res.json({
+    sessions: live,
+    rssBytes: live.reduce((n, s) => n + (s.rssBytes || 0), 0),
+  });
+}));
+
+/**
+ * Close sessions.
+ *
+ * Nothing is lost: a session is a `claude` process reading and writing a
+ * transcript that stays on disk, so closing one ends the process and leaves the
+ * card, the conversation and the ability to resume it exactly where they were.
+ * What it frees is the memory — several hundred megabytes per idle session,
+ * which is the whole reason this exists.
+ */
+app.post('/api/live/stop', wrap((req, res) => {
+  const ids = Array.isArray(req.body?.sessionIds) ? req.body.sessionIds : [];
+  if (!ids.length) throw new Error('No sessions given to close');
+
+  const stopped = [];
+  const failed = [];
+  for (const id of ids) {
+    if (term.stopTerm(String(id))) stopped.push(id);
+    else failed.push(id);
+  }
+  res.json({ stopped, failed });
 }));
 
 /** Sessions newest-first, whatever board or column they ended up in. */
@@ -376,15 +450,45 @@ app.get('/api/config', wrap((_req, res) =>
       enabled: labelsEnabled(),
       noun: config.labels.noun,
     },
-    reports: { enabled: reportsEnabled(), label: config.reports.label },
+    reports: { enabled: reportsEnabled(), label: config.reports.label, canRun: runEnabled() },
+    billing: {
+      enabled: billingEnabled(),
+      label: config.billing.label,
+      canRun: billingRunEnabled(),
+      canApprove: approveEnabled(),
+    },
     /*
-     * Nothing on this board works without Claude Code, and the failure without
-     * it is a spawn error on the first click. Reported here so the UI can say
-     * so plainly instead.
+     * Which coding agents this machine actually has, and which one new sessions
+     * start as. A board with neither installed fails with a spawn error on the
+     * first click; reported here so the UI can say so plainly instead.
      */
+    engine: currentEngine(),
+    engines: term.enginesStatus(),
+    /** Kept for anything still asking the old question. */
     claude: term.claudeStatus(),
   })
 ));
+
+/**
+ * Which engine new sessions start as.
+ *
+ * A board-wide setting, not a per-card one — see the note in engines.js. It
+ * changes nothing that is already running and nothing already on the board:
+ * a Claude card stays a Claude card and reopens in Claude.
+ */
+app.post('/api/engine', wrap((req, res) => {
+  const wanted = String(req.body?.engine || '');
+  if (!isEngine(wanted)) throw new Error(`No such engine: ${wanted}`);
+
+  const status = term.engineStatus(wanted);
+  if (!status.found) {
+    throw new Error(
+      `${engineFor(wanted).name} isn't installed — the board can't find its \`${engineFor(wanted).bin}\` command.`
+    );
+  }
+
+  res.json({ engine: setCurrentEngine(wanted), engines: term.enginesStatus() });
+}));
 
 app.get('/api/labels', wrap((_req, res) => res.json(labelsStatus())));
 
@@ -424,9 +528,23 @@ app.post('/api/boards', wrap((req, res) => {
 }));
 
 app.patch('/api/boards/:id', wrap((req, res) => {
-  const name = (req.body?.name || '').trim();
-  if (!name) throw new Error('Board name is required');
-  renameBoard(req.params.id, name);
+  if (req.body?.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name) throw new Error('Board name is required');
+    renameBoard(req.params.id, name);
+  }
+  /*
+   * The board's default label: what an unlabelled card here is presumed to be
+   * about. Resolved the same way a hand-typed card label is, so a typo becomes
+   * an error rather than a default nothing else recognises.
+   */
+  if (req.body?.defaultLabel !== undefined) {
+    const raw = String(req.body.defaultLabel ?? '').trim();
+    const label = raw ? resolveLabelKey(raw) : null;
+    if (raw && !label) throw new Error(`No ${config.labels.noun} matches “${raw}”`);
+    setBoardDefaultLabel(req.params.id, label);
+    applyBoardDefaults();
+  }
   res.json({ ok: true });
 }));
 
@@ -474,6 +592,13 @@ app.post('/api/columns/reorder', wrap((req, res) => {
   res.json({ ok: true });
 }));
 
+app.post('/api/boards/reorder', wrap((req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids)) throw new Error('ids array is required');
+  reorderBoards(ids);
+  res.json({ ok: true });
+}));
+
 /* ---------------------------------------------------------------- cards --- */
 
 /* -------------------------------------------------------------- archive --- */
@@ -518,6 +643,7 @@ app.get('/api/archive', wrap((req, res) => {
       userTurns: s?.userTurns ?? 0,
       hasTranscript: Boolean(s),
       archivedAt: row.archived_at || row.updated_at,
+      wakeAt: row.wake_at || null,
       // Where it will go back to, so "restore" is never a surprise.
       columnName: column?.name ?? null,
       boardName: board?.name ?? null,
@@ -570,30 +696,44 @@ app.post('/api/cards/from-event', wrap((req, res) => {
   }
 
   const sessionId = randomUUID();
-  const t = term.startTerm({ sessionId, cwd, mode: 'new', cols: 120, rows: 32 });
+  const { term: t, engine } = launchSession({ sessionId, cwd });
   attachSession(card.session_id, sessionId);
   updateCard(sessionId, { cwd });
+  // The row already exists under the manual card's id; this is where it learns
+  // which engine the session it just acquired actually is.
+  ensureCard(sessionId, { engine });
   scheduleDetect(sessionId);
-  res.json({ sessionId, started: true, pid: t.pid, cwd: t.cwd });
+  res.json({ sessionId, started: true, pid: t.pid, cwd: t.cwd, engine });
 }));
 
 /** Create a card by hand — a piece of work that has no session yet. */
 app.post('/api/cards', wrap((req, res) => {
   const title = (req.body?.title || '').trim();
   if (!title) throw new Error('A card needs a title');
-  res.json(
-    createManualCard({
-      columnId: req.body?.columnId,
-      title,
-      notes: (req.body?.notes || '').trim() || null,
-      cwd: req.body?.cwd || null,
-    })
-  );
+  const made = createManualCard({
+    columnId: req.body?.columnId,
+    title,
+    notes: (req.body?.notes || '').trim() || null,
+    cwd: req.body?.cwd || null,
+  });
+  applyBoardDefaults();
+  res.json(getCard(made.session_id) ?? made);
 }));
 
 app.post('/api/cards/:sessionId/archive', wrap((req, res) => {
   archiveCard(req.params.sessionId);
   res.json({ ok: true });
+}));
+
+/**
+ * Close a card until a date. `wakeAt` is an ISO instant the browser worked out,
+ * so "tomorrow morning" means tomorrow morning where you are rather than where
+ * the clock happens to be set. Null cancels a scheduled return, leaving the card
+ * closed.
+ */
+app.post('/api/cards/:sessionId/snooze', wrap((req, res) => {
+  const raw = req.body?.wakeAt ?? null;
+  res.json({ wakeAt: snoozeCard(req.params.sessionId, raw) });
 }));
 
 /** Permanent. The UI only offers this from inside the archive. */
@@ -611,12 +751,15 @@ app.post('/api/cards/:sessionId/session', wrap((req, res) => {
   const cwd = req.body?.cwd ? resolveDir(req.body.cwd) : card.cwd || homedir();
 
   const sessionId = randomUUID();
-  const t = term.startTerm({ sessionId, cwd, mode: 'new', cols: 120, rows: 32 });
+  const { term: t, engine } = launchSession({ sessionId, cwd });
   attachSession(card.session_id, sessionId);
   updateCard(sessionId, { cwd });
+  // The row already exists under the manual card's id; this is where it learns
+  // which engine the session it just acquired actually is.
+  ensureCard(sessionId, { engine });
   scheduleDetect(sessionId);
 
-  res.json({ sessionId, pid: t.pid, cwd: t.cwd });
+  res.json({ sessionId, pid: t.pid, cwd: t.cwd, engine });
 }));
 
 /**
@@ -657,9 +800,13 @@ app.post('/api/cards/:sessionId/label/dismiss', wrap((req, res) => {
 
 app.patch('/api/cards/:sessionId', wrap((req, res) => {
   const { columnId, position, boardId, ...rest } = req.body || {};
-  if (boardId !== undefined) moveCardToBoard(req.params.sessionId, boardId);
+  if (boardId !== undefined) {
+    moveCardToBoard(req.params.sessionId, boardId);
+    applyBoardDefaults();
+  }
   if (columnId !== undefined && position !== undefined) {
     moveCard(req.params.sessionId, columnId, position);
+    applyBoardDefaults();
   }
   if (Object.keys(rest).length) updateCard(req.params.sessionId, rest);
   res.json({ ok: true });
@@ -676,6 +823,37 @@ app.patch('/api/cards/:sessionId', wrap((req, res) => {
  * background sweep catches anything later; these are only for the common case
  * where a card should be labelled while you are still looking at it.
  */
+/**
+ * Start a session, whichever engine the board is set to, and do the one extra
+ * thing a Codex session needs.
+ *
+ * Every path that opens a terminal goes through here — the new-session dialog, a
+ * hand-written card, a calendar event, a routine, reopening an old card — so the
+ * toggle governs all of them rather than the one place somebody remembered.
+ *
+ * `engine` is passed only when the answer is already settled: reopening a card
+ * has to use the engine that card was started in, whatever the toggle says now.
+ * Everything else is a new conversation and follows the toggle.
+ */
+function launchSession({
+  sessionId, cwd, mode = 'new', cols = 120, rows = 32, engine = null, resumeId = null,
+}) {
+  const engineId = engine && isEngine(engine) ? engine : currentEngine();
+  const t = term.startTerm({ sessionId, cwd, mode, cols, rows, engine: engineId, resumeId });
+
+  if (engineId === 'codex') {
+    if (mode === 'resume' && resumeId) {
+      // Already ours — make sure a session starting alongside it can't adopt it.
+      claimThread(resumeId);
+    } else {
+      // Codex won't say which thread it created, so go and look. See adopt.js.
+      adoptCodexSession(sessionId, t.cwd, Date.parse(t.startedAt));
+    }
+  }
+
+  return { term: t, engine: engineId };
+}
+
 function scheduleDetect(sessionId) {
   for (const delay of [15_000, 45_000, 120_000]) {
     const id = setTimeout(() => {
@@ -722,6 +900,31 @@ app.post('/api/open', wrap((req, res) => {
 app.post('/api/sessions/:id/start', wrap((req, res) => {
   const sessionId = req.params.id;
   const known = findSession(sessionId);
+  const card = getCard(sessionId);
+
+  /*
+   * Reopening a card uses the engine that card was started in, whatever the
+   * board's toggle happens to say now. Switching the toggle changes what the
+   * next new session is; it cannot retroactively make an old conversation have
+   * happened somewhere else, and starting the wrong engine on a resume would
+   * either fail outright or — worse — quietly open an unrelated session.
+   *
+   * The transcript is the better authority than the card row, because it is
+   * where the conversation actually is. The row is the fallback for a card whose
+   * session has not written anything yet.
+   */
+  const engine = known?.engine || card?.engine || null;
+
+  /*
+   * What the engine calls this conversation. For Claude that is the session id.
+   * For Codex it is the thread recorded when the session was adopted — and if
+   * none was ever recorded, there is nothing to resume and the session starts
+   * fresh under the same card rather than reopening someone else's thread.
+   */
+  const resumeId =
+    engine === 'codex'
+      ? known?.engineThread || card?.engine_thread || codexAliases({ byCard: true }).get(sessionId) || null
+      : sessionId;
   // Through resolveDir so a `~` path isn't quietly discarded — startTerm falls
   // back to the home directory for anything it can't stat, which would start the
   // session in the wrong place without saying so.
@@ -736,7 +939,7 @@ app.post('/api/sessions/:id/start', wrap((req, res) => {
    * rather than trusting the caller to have guessed.
    */
   const wanted = req.body?.mode === 'new' ? 'new' : 'resume';
-  const mode = wanted === 'resume' && known?.path ? 'resume' : 'new';
+  const mode = wanted === 'resume' && known?.path && resumeId ? 'resume' : 'new';
 
   if (mode === 'resume') {
     // Remember where it stood, so merely reopening it doesn't read as new work.
@@ -748,16 +951,18 @@ app.post('/api/sessions/:id/start', wrap((req, res) => {
     clearResume(sessionId);
   }
 
-  const t = term.startTerm({
+  const { term: t, engine: started } = launchSession({
     sessionId,
     cwd,
     mode,
     cols: Number(req.body?.cols || 120),
     rows: Number(req.body?.rows || 32),
+    engine,
+    resumeId,
   });
-  ensureCard(sessionId, { cwd });
+  ensureCard(sessionId, { cwd, engine: started, engineThread: known?.engineThread ?? null });
   scheduleDetect(sessionId);
-  res.json({ sessionId, pid: t.pid, mode: t.mode, cwd: t.cwd });
+  res.json({ sessionId, pid: t.pid, mode: t.mode, cwd: t.cwd, engine: started });
 }));
 
 app.post('/api/sessions/:id/stop', wrap((req, res) => {
@@ -774,16 +979,17 @@ app.post('/api/sessions', wrap((req, res) => {
   const sessionId = randomUUID();
   const title = (req.body?.title || '').trim() || null;
 
-  const t = term.startTerm({
+  const { term: t, engine } = launchSession({
     sessionId,
     cwd,
-    mode: 'new',
     cols: Number(req.body?.cols || 120),
     rows: Number(req.body?.rows || 32),
+    // The dialog can name one; without it the board's toggle decides.
+    engine: req.body?.engine ?? null,
   });
-  ensureCard(sessionId, { columnId: req.body?.columnId, title, cwd });
+  ensureCard(sessionId, { columnId: req.body?.columnId, title, cwd, engine });
   scheduleDetect(sessionId);
-  res.json({ sessionId, pid: t.pid, cwd: t.cwd });
+  res.json({ sessionId, pid: t.pid, cwd: t.cwd, engine });
 }));
 
 /** Directory suggestions for the new-session dialog, most recently used first. */
@@ -848,6 +1054,37 @@ app.get('/api/timelog', wrap((req, res) =>
   )
 ));
 
+/**
+ * Token spend, read off the transcripts. Polls fast because the panel is meant
+ * to be watched while work runs — every pass after the first reads only the
+ * bytes the sessions have appended since.
+ */
+app.get('/api/usage', wrap((req, res) =>
+  res.json(
+    buildUsage({
+      days: Math.min(Math.max(Number(req.query.days || 7), 1), 8),
+      liveIds: term.liveSessionIds(),
+    })
+  )
+));
+
+/**
+ * How much of the plan is gone. Separate from /api/usage because it comes from
+ * Anthropic rather than from disk: it can fail on its own, and the panel keeps
+ * showing token counts when it does.
+ */
+app.get('/api/limits', wrap(async (_req, res) => res.json(await getLimits())));
+
+/**
+ * The same tokens as /api/usage, but every week the transcripts reach back to
+ * rather than the last eight days. Its own route because its first call reads
+ * the entire history and the ones after it read almost nothing — a cost curve
+ * the live panel should not have to wait behind.
+ */
+app.get('/api/history', wrap(async (req, res) =>
+  res.json(await buildHistory({ weeks: Number(req.query.weeks || 8) }))
+));
+
 app.get('/api/routines', wrap((_req, res) =>
   res.json(listRoutines().map((r) => ({ ...r, enabled: Boolean(r.enabled), due: isDue(r) })))
 ));
@@ -892,6 +1129,64 @@ app.get('/api/brief', wrap((req, res) => {
   const brief = readBrief(req.query.date);
   if (!brief) return res.status(404).json({ error: 'No morning brief found' });
   res.json(brief);
+}));
+
+/**
+ * The morning-brief run: one remembered session, started from the tab and
+ * answered in it. GET says where it stands; POST starts it, or returns the one
+ * already live unless asked to force a fresh start.
+ */
+function briefRunStatus() {
+  const run = briefRun();
+  if (!run) return null;
+  if (!run.live) return { ...run, working: false, idleMs: null };
+  const t = term.getTerm(run.sessionId);
+  const known = findSession(run.sessionId);
+  const { working, idleMs } = t ? liveActivity(t, known) : { working: false, idleMs: null };
+  return { ...run, working, idleMs };
+}
+
+app.get('/api/brief/run', wrap((_req, res) => res.json(briefRunStatus())));
+
+app.post('/api/brief/run', wrap((req, res) => {
+  const started = startBriefRun({ force: Boolean(req.body?.force) });
+  res.json({ ...briefRunStatus(), reused: started.reused });
+}));
+
+/* -------------------------------------------------------------- billing --- */
+
+app.get('/api/billing/summary', wrap((_req, res) => {
+  if (!billingEnabled()) return res.status(404).json({ error: 'Billing is not configured' });
+  res.json(billingSummary());
+}));
+
+/**
+ * Post approved time-entry drafts. The click behind this call IS the explicit
+ * approval — the panel confirms with the human before sending, and the brain's
+ * own script does the posting, so the policy that nothing posts unapproved
+ * stays intact end to end.
+ */
+app.post('/api/billing/approve', wrap(async (req, res) => {
+  const out = await approveDrafts(req.body?.ids);
+  res.json(out);
+}));
+
+/** The billing run: same contract as the morning-brief run above. */
+function billingRunStatus() {
+  const run = billingRun();
+  if (!run) return null;
+  if (!run.live) return { ...run, working: false, idleMs: null };
+  const t = term.getTerm(run.sessionId);
+  const known = findSession(run.sessionId);
+  const { working, idleMs } = t ? liveActivity(t, known) : { working: false, idleMs: null };
+  return { ...run, working, idleMs };
+}
+
+app.get('/api/billing/run', wrap((_req, res) => res.json(billingRunStatus())));
+
+app.post('/api/billing/run', wrap((req, res) => {
+  const started = startBillingRun({ force: Boolean(req.body?.force) });
+  res.json({ ...billingRunStatus(), reused: started.reused });
 }));
 
 /** Served standalone so the panel can iframe it without inlining the markup. */
@@ -952,8 +1247,31 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+/**
+ * Bring back cards whose return time has passed.
+ *
+ * Swept once at startup before anything is served, so a card that came due while
+ * the app was closed is already on the board the first time you look at it, and
+ * then on a timer for the ones that come due while you are sitting there.
+ */
+function startWakeSweep(intervalMs = 60_000) {
+  const tick = () => {
+    try {
+      for (const card of wakeDueCards()) {
+        console.log(`"${card.title || card.sessionId}" is back`);
+      }
+    } catch (err) {
+      console.error('could not bring cards back:', err.message);
+    }
+  };
+  tick();
+  const id = setInterval(tick, intervalMs);
+  id.unref?.();
+}
+
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`${config.appName} → http://127.0.0.1:${PORT}`);
+  startWakeSweep();
   startScheduler();
   startReviewWatcher();
   startLabelWatcher();

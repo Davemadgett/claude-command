@@ -3,9 +3,10 @@ import { statSync } from 'node:fs';
 import {
   cleanPrompt, jsonLines, labelFromPath, readChunk, scanSessions, transcriptPath,
 } from './sessions.js';
+import { codexUserTurns, isCodexTranscript } from './codex.js';
 import { knownLabels, labelFolders } from './providers/index.js';
 import { config } from './config.js';
-import { getCard, listCards, setCardLabel, suggestCardLabel } from './db.js';
+import { applyBoardDefaults, getCard, listCards, setCardLabel, suggestCardLabel } from './db.js';
 
 /**
  * Which label a session is about, read from what you typed into it.
@@ -87,6 +88,17 @@ function userTurns(path) {
   const key = `${stat.size}:${stat.mtimeMs}`;
   const hit = cache.get(path);
   if (hit && hit.key === key) return hit.turns;
+
+  // A Codex rollout keeps the same distinction — what a person typed, separate
+  // from the AGENTS.md and reminders injected around it — but records it in a
+  // different vocabulary. Same rule, different reader.
+  if (isCodexTranscript(path)) {
+    const turns = codexUserTurns(path, { maxText: MAX_TEXT }).filter(
+      (t) => !MACHINERY.some((re) => re.test(t))
+    );
+    cache.set(path, { key, turns });
+    return turns;
+  }
 
   const parts = [];
   let budget = MAX_TEXT;
@@ -268,7 +280,9 @@ export function sweepLabels() {
   const applied = [];
   for (const card of listCards()) {
     if (card.archived || card.manual) continue;
-    if (card.label) continue; // already settled, by detection or by hand
+    // Settled by detection or by hand. A board-default label is not settled —
+    // it is a fallback, and anything the session actually says outranks it.
+    if (card.label && card.label_source !== 'board') continue;
 
     const session = sessions.get(card.session_id);
     if (!session?.path) continue;
@@ -276,6 +290,7 @@ export function sweepLabels() {
 
     const hit = detectLabel(userTurns(session.path));
     if (!hit) continue;
+    if (hit.label === card.label) continue; // the board default already says so
 
     /*
      * Where the prompt disagrees with what the session did, the session wins.
@@ -310,7 +325,7 @@ export function sweepLabels() {
  */
 export function detectForSession(sessionId) {
   const card = getCard(sessionId);
-  if (!card || card.label) return null;
+  if (!card || (card.label && card.label_source !== 'board')) return null;
   // The working directory answers first when it can, and costs nothing to check.
   if (labelFromPath(card.cwd)) return null;
 
@@ -318,7 +333,7 @@ export function detectForSession(sessionId) {
   if (!path) return null;
 
   const hit = detectLabel(userTurns(path));
-  if (!hit) return null;
+  if (!hit || hit.label === card.label) return null;
   if (hit.apply) {
     setCardLabel(sessionId, hit.label, 'prompt');
   } else if (card.label_dismissed !== hit.label) {
@@ -329,6 +344,11 @@ export function detectForSession(sessionId) {
 
 export function startLabelWatcher({ intervalMs = 30_000 } = {}) {
   const tick = () => {
+    try {
+      applyBoardDefaults();
+    } catch (err) {
+      console.error('board defaults failed:', err.message);
+    }
     try {
       for (const hit of sweepLabels()) {
         console.log(

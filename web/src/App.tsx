@@ -12,11 +12,14 @@ import {
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable';
 
 import { api } from './api';
+import { BoardTab } from './components/BoardTab';
 import { CardContent } from './components/CardView';
 import { CardMenu } from './components/CardMenu';
 import { ColumnView } from './components/ColumnView';
 import { SessionPanel } from './components/SessionPanel';
+import { BillingPanel } from './components/BillingPanel';
 import { BriefPanel } from './components/BriefPanel';
+import { UsagePanel } from './components/UsagePanel';
 import { NewSessionDialog } from './components/NewSessionDialog';
 import { SkillsView } from './components/SkillsView';
 import { ScheduledView } from './components/ScheduledView';
@@ -24,11 +27,16 @@ import { TimeLogView } from './components/TimeLogView';
 import { AgentsView } from './components/AgentsView';
 import { ArchiveView } from './components/ArchiveView';
 import { Logo } from './components/Logo';
+import { EngineToggle } from './components/EngineToggle';
 import { CalendarView } from './components/CalendarView';
 import { LiveView } from './components/LiveView';
-import type { AppConfig, BoardState, Card } from './types';
+import { perWindow } from './windowId';
+import { hasNative } from './native';
+import type { AppConfig, BoardState, BriefRun, Card } from './types';
 
 const POLL_MS = 4000;
+/** Kept in step with the server's own id for the board new sessions land on. */
+const UNSORTED_BOARD = 'unsorted';
 type View = 'board' | 'live' | 'calendar' | 'time' | 'archive' | 'skills' | 'scheduled' | 'agents';
 
 /**
@@ -63,16 +71,51 @@ export default function App() {
   }, []);
 
   const [board, setBoard] = useState<BoardState | null>(null);
-  const [boardId, setBoardId] = useState<string | null>(() => localStorage.getItem('boardId'));
-  const [view, setView] = useState<View>(() => (localStorage.getItem('view') as View) || 'board');
+  const [boardId, setBoardId] = useState<string | null>(() => localStorage.getItem(perWindow('boardId')));
+  const [view, setView] = useState<View>(
+    () => (localStorage.getItem(perWindow('view')) as View) || 'board'
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // The second row selects what fills the screen: one of the boards, or the brief.
-  const [showBrief, setShowBrief] = useState(false);
-  const [sinceDays, setSinceDays] = useState(() => Number(localStorage.getItem('sinceDays') ?? 7));
+  /**
+   * The second row selects what fills the screen: one of the boards, or one of
+   * the panels pinned to its right. They are mutually exclusive, so this is one
+   * value rather than a flag per panel — adding a third panel shouldn't mean
+   * remembering to turn the other two off.
+   */
+  const [overlay, setOverlay] = useState<'brief' | 'usage' | 'billing' | null>(null);
+  /**
+   * Where the morning-brief run stands, polled so the tab itself can say so.
+   * The brief asks questions as it goes, and a question nobody sees is a brief
+   * that gets abandoned and run again — the pulse on the tab is what makes the
+   * wait visible from anywhere in the app.
+   */
+  const [briefRun, setBriefRun] = useState<BriefRun | null>(null);
+  useEffect(() => {
+    const tick = () => api.briefRun().then(setBriefRun).catch(() => {});
+    tick();
+    const id = setInterval(tick, POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+  /** Same watch for the billing run — its questions deserve the same pulse. */
+  const [billingRun, setBillingRun] = useState<BriefRun | null>(null);
+  useEffect(() => {
+    const tick = () => api.billingRun().then(setBillingRun).catch(() => {});
+    tick();
+    const id = setInterval(tick, POLL_MS);
+    return () => clearInterval(id);
+  }, []);
   const includeArchived = false; // archived cards live in the Archive tab
   const [dragging, setDragging] = useState<Card | null>(null);
   const [menu, setMenu] = useState<{ card: Card; x: number; y: number } | null>(null);
   const [showNew, setShowNew] = useState(false);
+  /**
+   * Find a card by name. A board with forty cards is scanned, not read, and
+   * ⌘F is the scan. It filters rather than jumps — the matches stay in their
+   * columns, so where a card is stays as legible as which one it is.
+   */
+  const [query, setQuery] = useState('');
+  const [searchNonce, setSearchNonce] = useState(0);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>(
     () => (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
@@ -83,7 +126,7 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const b = await api.board({ sinceDays, interactiveOnly: true, includeArchived, boardId });
+      const b = await api.board({ interactiveOnly: true, includeArchived, boardId });
       if (!draggingRef.current) {
         setBoard(b);
         if (b.boardId !== boardId) setBoardId(b.boardId);
@@ -91,7 +134,7 @@ export default function App() {
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [sinceDays, includeArchived, boardId]);
+  }, [includeArchived, boardId]);
 
   useEffect(() => {
     refresh();
@@ -104,10 +147,24 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  useEffect(() => localStorage.setItem('view', view), [view]);
-  useEffect(() => localStorage.setItem('sinceDays', String(sinceDays)), [sinceDays]);
+  /**
+   * The Mac app's View ▸ Appearance menu drives the theme through this, since
+   * the menu bar is a better home for a setting you touch twice a year than the
+   * top of the board. Every window is told, so they don't drift apart.
+   */
   useEffect(() => {
-    if (boardId) localStorage.setItem('boardId', boardId);
+    const w = window as unknown as {
+      __theme?: { get: () => string; set: (t: 'dark' | 'light') => void };
+    };
+    w.__theme = { get: () => theme, set: (t) => setTheme(t === 'light' ? 'light' : 'dark') };
+    return () => {
+      delete w.__theme;
+    };
+  }, [theme]);
+
+  useEffect(() => localStorage.setItem(perWindow('view'), view), [view]);
+  useEffect(() => {
+    if (boardId) localStorage.setItem(perWindow('boardId'), boardId);
   }, [boardId]);
 
   useEffect(() => {
@@ -143,6 +200,84 @@ export default function App() {
   /** Switching sections or boards should put you at the top of what you chose. */
   const scrollToTop = useCallback(() => window.scrollTo({ top: 0 }), []);
 
+  /*
+   * The four things worth a key. Each is a plain "go there" rather than a
+   * toggle, so a second press — or the same press arriving twice, once from the
+   * menu and once from the page — lands in the same place.
+   */
+  const newSession = useCallback(() => setShowNew(true), []);
+  const showBrief = useCallback(() => {
+    setView('board');
+    setOverlay('brief');
+    scrollToTop();
+  }, [scrollToTop]);
+  const showUsage = useCallback(() => {
+    setView('board');
+    setOverlay('usage');
+    scrollToTop();
+  }, [scrollToTop]);
+  const showBilling = useCallback(() => {
+    setView('board');
+    setOverlay('billing');
+    scrollToTop();
+  }, [scrollToTop]);
+  const findCard = useCallback(() => {
+    setView('board');
+    setOverlay(null);
+    setSearchNonce((n) => n + 1);
+  }, []);
+
+  // The box mounts with the board, so focus it after that render, not before.
+  useEffect(() => {
+    if (!searchNonce) return;
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  }, [searchNonce]);
+
+  /**
+   * The Mac app binds ⌘N / ⌘F / ⌘B / ⌘U as menu items, which is what makes them
+   * work while a terminal has the keyboard — a menu key equivalent is taken
+   * before the web view sees it. The menu calls in through this. (⌘T, a new
+   * board tab, is the app's alone — tabs are windows, and the page has none.)
+   * In a plain browser there is no menu, so the same keys are caught on the
+   * page; ⌘N is the browser's own there and can't be claimed, the other three
+   * can.
+   */
+  useEffect(() => {
+    const w = window as unknown as {
+      __app?: {
+        newSession: () => void;
+        findCard: () => void;
+        showBrief: () => void;
+        showUsage: () => void;
+        showBilling: () => void;
+      };
+    };
+    w.__app = { newSession, findCard, showBrief, showUsage, showBilling };
+    const onKey = (e: KeyboardEvent) => {
+      // ⌘ only. Control is the terminal's: ^B ^F ^T ^U all mean something at a shell.
+      if (!e.metaKey || e.ctrlKey || e.altKey) return;
+      // The one shifted key: ⇧⌘B, billing — ⌘B alone stays the brief.
+      if (e.shiftKey) {
+        if (e.key.toLowerCase() !== 'b') return;
+        e.preventDefault();
+        e.stopPropagation();
+        showBilling();
+        return;
+      }
+      const go = { n: newSession, f: findCard, b: showBrief, u: showUsage }[e.key.toLowerCase()];
+      if (!go) return;
+      e.preventDefault();
+      e.stopPropagation();
+      go();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      delete w.__app;
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [newSession, findCard, showBrief, showUsage, showBilling]);
+
   /** Select a card. Deliberately does not scroll — the board stays put. */
   const selectCard = useCallback((sessionId: string) => {
     setSelectedId(sessionId);
@@ -151,7 +286,7 @@ export default function App() {
   /** Open a session: show it in the panel below and go there. */
   const openSession = useCallback((sessionId: string) => {
     setView('board');
-    setShowBrief(false);
+    setOverlay(null);
     setSelectedId(sessionId);
 
     // Not requestAnimationFrame: a scroll issued from inside the frame callback
@@ -180,6 +315,34 @@ export default function App() {
     draggingRef.current = true;
     const data = e.active.data.current;
     if (data?.type === 'card') setDragging(data.card as Card);
+  };
+
+  /**
+   * Tabs are dragged where they are clicked, so a tab only starts moving after
+   * the pointer has travelled far enough to mean it. Below that it is a click,
+   * and clicking a tab switches board.
+   */
+  const tabSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  const onTabDragEnd = async (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!board || !over || active.id === over.id) return;
+
+    const ids = board.boards.map((b) => b.id);
+    const from = ids.indexOf(String(active.id));
+    const to = ids.indexOf(String(over.id));
+    if (from === -1 || to === -1) return;
+
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    // Moved locally first: the row is the thing being dragged, and waiting for
+    // a round trip to redraw it makes the tab snap back before it moves.
+    setBoard({ ...board, boards: ids.map((id) => board.boards.find((b) => b.id === id)!) });
+    try {
+      await api.reorderBoards(ids);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+    return refresh();
   };
 
   const onDragEnd = async (e: DragEndEvent) => {
@@ -255,6 +418,11 @@ export default function App() {
   if (!board) return <div className="pane-empty">Loading board…</div>;
 
   const liveCount = board.cards.filter((c) => c.live).length;
+  const matches = (c: Card) => {
+    const q = query.trim().toLowerCase();
+    return !q || c.title.toLowerCase().includes(q) || (c.label ?? '').toLowerCase().includes(q);
+  };
+  const matchCount = board.cards.filter(matches).length;
   const onBoard = view === 'board';
 
   return (
@@ -293,16 +461,6 @@ export default function App() {
                   {liveCount} live
                 </span>
               )}
-              <label>
-                Window
-                <select value={sinceDays} onChange={(e) => setSinceDays(Number(e.target.value))}>
-                  <option value={1}>Today</option>
-                  <option value={3}>3 days</option>
-                  <option value={7}>7 days</option>
-                  <option value={30}>30 days</option>
-                  <option value={0}>All time</option>
-                </select>
-              </label>
             </>
           )}
           <button
@@ -316,52 +474,110 @@ export default function App() {
           >
             {board.caffeinated ? '☕' : '☕'}
           </button>
-          <button
-            className="ghost theme-toggle"
-            title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          >
-            {theme === 'dark' ? '☀' : '☾'}
-          </button>
-          <button className="primary" onClick={() => setShowNew(true)}>
+          {/* In the app this lives in View ▸ Appearance. A browser has no menu
+              bar to put it in, so there it stays a button. */}
+          {!hasNative() && (
+            <button
+              className="ghost theme-toggle"
+              title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? '☀' : '☾'}
+            </button>
+          )}
+          {appConfig && (
+            <EngineToggle
+              config={appConfig}
+              onChange={async (engine) => {
+                // Optimistic: the switch should move under the pointer, not a
+                // round trip later. The server's answer is authoritative and
+                // replaces it either way.
+                setAppConfig({ ...appConfig, engine });
+                try {
+                  const next = await api.setEngine(engine);
+                  setAppConfig((c) => (c ? { ...c, ...next } : c));
+                } catch (e) {
+                  setAppConfig(appConfig);
+                  setError((e as Error).message);
+                }
+              }}
+            />
+          )}
+          <button className="primary" title="⌘N" onClick={newSession}>
             + New session
           </button>
         </div>
 
         {onBoard && (
           <div className="board-tabs">
-            {board.boards.map((b) => (
-              <button
-                key={b.id}
-                className={`board-tab ${b.id === board.boardId && !showBrief ? 'on' : ''}`}
-                onClick={() => {
-                  setBoardId(b.id);
-                  setShowBrief(false);
-                  scrollToTop();
-                }}
-                onDoubleClick={() => {
-                  const name = prompt('Board name', b.name);
-                  if (name?.trim()) act(() => api.renameBoard(b.id, name.trim()));
-                }}
-                title="Double-click to rename"
+            {/* Its own drag context: the board below has one of its own for
+                cards and columns, and a tab has nothing to do with either. */}
+            <DndContext sensors={tabSensors} onDragEnd={onTabDragEnd}>
+              <SortableContext
+                items={board.boards.map((b) => b.id)}
+                strategy={horizontalListSortingStrategy}
               >
-                {b.name}
-                {b.id === board.boardId && board.boards.length > 1 && (
-                  <span
-                    className="x"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(`Delete the “${b.name}” board? Its cards move to another board.`)) {
-                        setBoardId(null);
-                        act(() => api.deleteBoard(b.id));
-                      }
+                {board.boards.map((b) => (
+                  <BoardTab
+                    key={b.id}
+                    id={b.id}
+                    active={b.id === board.boardId && !overlay}
+                    onClick={() => {
+                      setBoardId(b.id);
+                      setOverlay(null);
+                      scrollToTop();
                     }}
+                    onDoubleClick={() => {
+                      const name = prompt('Board name', b.name);
+                      if (name?.trim()) act(() => api.renameBoard(b.id, name.trim()));
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      const noun = appConfig?.labels.noun ?? 'label';
+                      const raw = prompt(
+                        `Default ${noun} for “${b.name}” — applied to cards here that have no ` +
+                          `${noun} of their own. Stronger evidence (your choice, a folder, a file ` +
+                          `number in the session) replaces it. Leave blank for no default.`,
+                        b.default_label ?? ''
+                      );
+                      if (raw === null) return;
+                      act(() => api.setBoardDefaultLabel(b.id, raw.trim() || null));
+                    }}
+                    title={
+                      'Drag to reorder · double-click to rename · right-click to set a default ' +
+                      (appConfig?.labels.noun ?? 'label') +
+                      (b.default_label ? ` (now ${b.default_label})` : '')
+                    }
                   >
-                    ✕
-                  </span>
-                )}
-              </button>
-            ))}
+                    {b.name}
+                    {/* The count is the whole reason this tab exists: sessions
+                        arrive on their own, and you need to see that from a
+                        board you are already on. */}
+                    {b.id === UNSORTED_BOARD && board.unsorted > 0 && (
+                      <span className="tab-count">{board.unsorted}</span>
+                    )}
+                    {b.id === board.boardId &&
+                      b.id !== UNSORTED_BOARD &&
+                      board.boards.length > 1 && (
+                        <span
+                          className="x"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (
+                              confirm(`Delete the “${b.name}” board? Its cards move to another board.`)
+                            ) {
+                              setBoardId(null);
+                              act(() => api.deleteBoard(b.id));
+                            }
+                          }}
+                        >
+                          ✕
+                        </span>
+                      )}
+                  </BoardTab>
+                ))}
+              </SortableContext>
+            </DndContext>
             <button
               className="board-tab"
               title="New board"
@@ -371,7 +587,7 @@ export default function App() {
                 try {
                   const created = await api.addBoard(name.trim());
                   setBoardId(created.id);
-                  setShowBrief(false);
+                  setOverlay(null);
                   scrollToTop();
                   refresh();
                 } catch (e) {
@@ -384,17 +600,67 @@ export default function App() {
 
             <span className="tab-divider" />
             <button
-              className={`board-tab ${showBrief ? 'on' : ''}`}
-              onClick={() => {
-                setShowBrief(true);
-                scrollToTop();
-              }}
+              className={`board-tab ${overlay === 'brief' ? 'on' : ''}`}
+              title="⌘B"
+              onClick={showBrief}
             >
               Morning Brief
+              {briefRun?.live && (
+                <span
+                  className={`tab-pulse ${briefRun.working ? '' : 'wait'}`}
+                  title={briefRun.working ? 'Morning brief is running' : 'Morning brief is waiting for your answer'}
+                />
+              )}
+            </button>
+            {appConfig?.billing.enabled && (
+              <button
+                className={`board-tab ${overlay === 'billing' ? 'on' : ''}`}
+                title="⇧⌘B"
+                onClick={showBilling}
+              >
+                {appConfig.billing.label}
+                {billingRun?.live && (
+                  <span
+                    className={`tab-pulse ${billingRun.working ? '' : 'wait'}`}
+                    title={billingRun.working ? 'Billing session is running' : 'Billing session is waiting for your answer'}
+                  />
+                )}
+              </button>
+            )}
+            <button
+              className={`board-tab ${overlay === 'usage' ? 'on' : ''}`}
+              title="⌘U"
+              onClick={showUsage}
+            >
+              Usage
+              {liveCount > 0 && <span className="tab-pulse" />}
             </button>
 
             <div className="spacer" />
-            {!showBrief && (
+            {!overlay && (
+              <div className={`card-search ${query ? 'on' : ''}`}>
+                <input
+                  ref={searchRef}
+                  type="search"
+                  placeholder="Find card…  ⌘F"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setQuery('');
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  spellCheck={false}
+                />
+                {query && (
+                  <span className="count" title="Cards whose name or matter matches">
+                    {matchCount} of {board.cards.length}
+                  </span>
+                )}
+              </div>
+            )}
+            {!overlay && (
               <button
                 className="ghost"
                 onClick={() => act(() => api.addColumn('New column', '#64748b', board.boardId))}
@@ -407,18 +673,26 @@ export default function App() {
       </div>
 
       {/*
-        Every session on this board is a `claude` process, so without Claude Code
-        the board loads, shows nothing, and fails on the first click with a spawn
-        error. Saying so up front is the difference between a five-minute setup
-        and concluding the thing is broken.
+        Every session on this board is a real agent process, so without the one
+        the board is set to the board loads, shows nothing, and fails on the
+        first click with a spawn error. Saying so up front is the difference
+        between a five-minute setup and concluding the thing is broken. Only the
+        engine actually selected is worth a banner — an uninstalled second engine
+        is a greyed-out switch, not a problem.
       */}
-      {appConfig && !appConfig.claude.found && (
-        <div className="notice setup">
-          <strong>Claude Code isn’t installed yet.</strong> This board runs your sessions with the{' '}
-          <code>claude</code> command, and can’t find it. Install it, then run <code>claude</code>{' '}
-          once in a terminal to sign in — the board picks it up on the next reload.
-        </div>
-      )}
+      {(() => {
+        const active = appConfig?.engines?.find((e) => e.id === appConfig.engine);
+        if (!appConfig || !active || active.found) return null;
+        const cmd = active.id === 'codex' ? 'codex' : 'claude';
+        return (
+          <div className="notice setup">
+            <strong>{active.name} isn’t installed yet.</strong> New sessions are set to start in{' '}
+            {active.name}, and the board can’t find its <code>{cmd}</code> command. Install it, then
+            run <code>{cmd}</code> once in a terminal to sign in — the board picks it up on the next
+            reload. Or switch the toggle back.
+          </div>
+        );
+      })()}
 
       {view === 'live' && <LiveView onOpenSession={openSession} onError={setError} />}
       {view === 'calendar' && (
@@ -443,13 +717,24 @@ export default function App() {
       {view === 'agents' && <AgentsView onError={setError} />}
       {view === 'archive' && <ArchiveView onRestored={refresh} onError={setError} />}
 
-      {onBoard && showBrief && (
+      {onBoard && overlay && (
         <div className="board-scroll" style={{ overflow: 'hidden', position: 'relative' }}>
-          <BriefPanel />
+          {overlay === 'brief' ? (
+            <BriefPanel canRun={appConfig?.reports.canRun ?? false} onOpenSession={openSession} />
+          ) : overlay === 'billing' ? (
+            <BillingPanel
+              canRun={appConfig?.billing.canRun ?? false}
+              canApprove={appConfig?.billing.canApprove ?? false}
+              label={appConfig?.billing.label ?? 'Billing'}
+              onOpenSession={openSession}
+            />
+          ) : (
+            <UsagePanel />
+          )}
         </div>
       )}
 
-      {onBoard && !showBrief && (
+      {onBoard && !overlay && (
         <>
           <DndContext
             sensors={sensors}
@@ -471,7 +756,7 @@ export default function App() {
                     <ColumnView
                       key={col.id}
                       column={col}
-                      cards={cardsIn(col.id)}
+                      cards={cardsIn(col.id).filter(matches)}
                       selectedId={selectedId}
                       onSelect={(c) => selectCard(c.sessionId)}
                       onOpen={(c) => openSession(c.sessionId)}
@@ -559,6 +844,7 @@ export default function App() {
             if (name !== null) act(() => api.updateCard(c.sessionId, { title: name.trim() || null }));
           }}
           onArchive={(c) => act(() => api.archiveCard(c.sessionId))}
+          onSnooze={(c, wakeAt) => act(() => api.snoozeCard(c.sessionId, wakeAt))}
           onDelete={(c) => {
             if (confirm(`Delete “${c.title}”?`)) act(() => api.deleteCard(c.sessionId));
           }}
@@ -582,6 +868,7 @@ export default function App() {
           defaultColumnId={board.columns.find((c) => !c.review_of)?.id}
           labelsEnabled={appConfig?.labels.enabled ?? false}
           labelNoun={appConfig?.labels.noun ?? 'label'}
+          engine={appConfig?.engines?.find((e) => e.id === appConfig.engine) ?? null}
           onClose={() => setShowNew(false)}
           onCreated={(sessionId) => {
             setShowNew(false);

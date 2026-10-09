@@ -12,6 +12,7 @@ const SOURCE_LABEL: Record<string, string> = {
   cwd: 'from folder',
   files: 'from files',
   prompt: 'from a prompt',
+  board: 'board default',
 };
 
 const capitalise = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);

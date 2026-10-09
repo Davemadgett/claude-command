@@ -2,6 +2,8 @@ export type BoardTab = {
   id: string;
   name: string;
   position: number;
+  /** Label presumed for cards here that have none of their own. */
+  default_label: string | null;
 };
 
 export type Column = {
@@ -16,14 +18,27 @@ export type Column = {
 
 export type Priority = 'high' | 'medium' | 'low' | null;
 
+/** Which coding agent a session is. */
+export type EngineId = 'claude' | 'codex';
+
+export type EngineStatus = {
+  id: EngineId;
+  name: string;
+  /** False when the command isn't installed — sessions can't start in it. */
+  found: boolean;
+  path: string | null;
+};
+
 export type Card = {
   sessionId: string;
+  /** Null on a card whose session hasn't started, so nothing knows yet. */
+  engine?: EngineId | null;
   project: string;
   cwd: string | null;
   gitBranch?: string | null;
   label: string | null;
   /** How the label was arrived at, weakest last. */
-  labelSource?: 'manual' | 'cwd' | 'files' | 'prompt' | null;
+  labelSource?: 'manual' | 'cwd' | 'files' | 'prompt' | 'board' | null;
   /** A name-strength guess waiting on a yes or no. */
   labelSuggested?: string | null;
   priority?: Priority;
@@ -38,6 +53,8 @@ export type Card = {
   customTitle: boolean;
   notes: string;
   archived: boolean;
+  /** When this card is due to come back, ISO, or null. */
+  wakeAt?: string | null;
   pinned: boolean;
   manual: boolean;
   live: boolean;
@@ -61,6 +78,8 @@ export type BoardState = {
   columns: Column[];
   cards: Card[];
   prefs: { sinceDays: number; interactiveOnly: boolean; includeArchived: boolean };
+  /** Cards waiting on the Unsorted board, whichever board you are looking at. */
+  unsorted: number;
 };
 
 export type SessionFile = {
@@ -68,7 +87,14 @@ export type SessionFile = {
   name: string;
   dir: string;
   ext: string;
-  source: 'tool' | 'window';
+  /** doc = .pdf/.doc/.docx; md = markdown; other = scripts, data, everything else. */
+  kind: 'doc' | 'md' | 'other';
+  /** tool = a Write/Edit call; mention = a document path named in the transcript that changed during the session; received = named in the transcript, already on disk when named but arrived after the session began (a Court Watch download it handled); window = changed in the cwd while it ran. */
+  source: 'tool' | 'mention' | 'received' | 'window';
+  /** In a _Superseded folder, or moved into one after the session wrote it (path then points at the shelved copy). */
+  superseded: boolean;
+  /** A working copy in the session scratchpad, not a deliverable. */
+  scratch: boolean;
   exists: boolean;
   sizeBytes: number | null;
   mtime: string | null;
@@ -115,7 +141,7 @@ export type TimeLogEntry = {
   date: string;
   label: string | null;
   client: string | null;
-  labelSource: 'manual' | 'cwd' | 'files' | 'prompt' | null;
+  labelSource: 'manual' | 'cwd' | 'files' | 'prompt' | 'board' | null;
   labelUrl?: string | null;
   labelFolder?: string | null;
   project: string;
@@ -161,6 +187,132 @@ export type Brief = {
   file: string;
   sizeBytes: number;
   mtime: string;
+};
+
+/** The one session the Morning Brief tab runs /morningbrief in. */
+export type BriefRun = {
+  sessionId: string;
+  cwd: string;
+  startedAt: string;
+  live: boolean;
+  /** Claude owes a reply. When live and not working, it is waiting on you. */
+  working: boolean;
+  idleMs: number | null;
+  /** POST only: the run was already live, so nothing new was started. */
+  reused?: boolean;
+};
+
+/** One session the Billing tab runs the billing agent in — same shape as BriefRun. */
+export type BillingRun = BriefRun;
+
+export type BillingBill = {
+  billId: number;
+  matter: string;
+  program: string | null;
+  number: string;
+  issued: string | null;
+  due: string | null;
+  total: number;
+  paid: number;
+  balance: number;
+  state: string;
+  submission: string | null;
+  ageDays: number | null;
+  overdue: boolean;
+};
+
+export type BillingDraft = {
+  id: number;
+  matterId: number | null;
+  matter: string | null;
+  program: string | null;
+  date: string;
+  hours: number;
+  activity: string | null;
+  description: string;
+  rate: number | null;
+  capFlag: string | null;
+  capFlagDetail: string | null;
+  billable: number | null;
+  createdAt: string;
+  amount: number;
+};
+
+export type BillingPing = {
+  id: number;
+  matter: string | null;
+  severity: string;
+  body: string;
+  context: string | null;
+  createdAt: string;
+  ageDays: number | null;
+};
+
+export type BillingBudget = {
+  matterId: number;
+  matter: string;
+  program: string | null;
+  memberId: string | null;
+  cap: number | null;
+  authorized: number | null;
+  rate: number | null;
+  billed: number;
+  paid: number;
+  rteApproved: number;
+  rteOpen: number;
+  budget: number | null;
+  flags: string[];
+};
+
+export type BillingUnbilled = {
+  id: number;
+  matter: string | null;
+  description: string;
+  hours: number | null;
+  observed: string | null;
+  source: string | null;
+};
+
+export type BillingPortalCase = {
+  serviceId: string;
+  client: string;
+  eids: string;
+  caseType: string;
+  started: string;
+  paid: number;
+};
+
+/** Everything the Billing tab shows, in one server read of the billing brain. */
+export type BillingSummary = {
+  generatedAt: string;
+  syncedAt: string | null;
+  lastSweep: { started_at: string; finished_at: string | null; mode: string | null } | null;
+  ar: {
+    total: number;
+    draft: number;
+    awaiting: number;
+    overdue: number;
+    overdueDays: number;
+    byProgram: Record<string, number>;
+    bills: BillingBill[];
+  };
+  drafts: { rows: BillingDraft[]; hours: number; amount: number };
+  pings: { open: number; urgent: number; rows: BillingPing[]; shown: number };
+  budgets: BillingBudget[];
+  unbilled: { rows: BillingUnbilled[]; hours: number };
+  reconciliation: {
+    snapshot: string;
+    snapshotDate: string | null;
+    openCases: number;
+    matched: number;
+    unmatched: BillingPortalCase[];
+  } | null;
+};
+
+export type BillingApproveResult = {
+  results: { draft_id: number; status: string | null; clio_time_entry_id: number | null; error: string | null }[];
+  posted: number;
+  failed: number;
 };
 
 export type BrowseResult = {
@@ -209,6 +361,8 @@ export type ArchivedCard = {
   userTurns: number;
   hasTranscript: boolean;
   archivedAt: string;
+  /** When this card is due to come back, ISO, or null. */
+  wakeAt: string | null;
   columnName: string | null;
   boardName: string | null;
   columnMissing: boolean;
@@ -242,7 +396,128 @@ export type LiveSession = {
   quietMs: number;
   idleMs: number;
   working: boolean;
+  /** Resident memory of the session process, or null if `ps` had nothing. */
+  rssBytes: number | null;
   reactivated?: boolean;
+};
+
+/** Tokens and their list-price equivalent, however they were grouped. */
+export type UsageTotals = {
+  tokens: number;
+  cost: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  requests: number;
+};
+
+export type UsageSession = UsageTotals & {
+  sessionId: string;
+  title: string;
+  project: string;
+  label: string | null;
+  labelUrl?: string | null;
+  model: string | null;
+  /** Whether the board is the thing running it, or it just spent recently. */
+  live: boolean;
+  lastAt: string;
+  tokensPerMin: number;
+  costPerHour: number;
+  /** Twelve 5-minute buckets — the last hour, oldest first. */
+  spark: number[];
+};
+
+export type Usage = {
+  generatedAt: string;
+  windows: {
+    /** `peak` is the busiest equivalent stretch in the window — the bar's scale. */
+    fiveHour: UsageTotals & { peak: number; hours: number };
+    today: UsageTotals & { peak: number; date: string };
+    week: UsageTotals & { days: number };
+  };
+  active: UsageSession[];
+  daily: (UsageTotals & { date: string })[];
+  byLabel: (UsageTotals & {
+    label: string | null;
+    client: string | null;
+    labelSource: 'manual' | 'cwd' | 'files' | 'prompt' | 'board' | null;
+    labelUrl?: string | null;
+    labelFolder?: string | null;
+    sessions: number;
+  })[];
+  byModel: (UsageTotals & { model: string })[];
+  pricing: {
+    basis: string;
+    cacheRead: number;
+    cacheWrite5m: number;
+    cacheWrite1h: number;
+    models: { match: string; input: number; output: number }[];
+  };
+  params: { days: number; retainDays: number; rateMinutes: number };
+};
+
+/**
+ * One plan week — Friday evening to Friday evening, not Monday to Sunday.
+ *
+ * `toDate` is what that week had spent by the same hour the current week has
+ * reached, which is the only figure a half-finished week can honestly be
+ * compared against.
+ */
+export type UsageWeek = UsageTotals & {
+  start: string;
+  end: string;
+  current: boolean;
+  /** False when the transcripts do not reach back this far. */
+  covered: boolean;
+  toDate: { tokens: number; cost: number };
+};
+
+export type UsageHistory = {
+  /** The reset instant the weeks are aligned to. */
+  anchor: string;
+  anchorSource: 'plan' | 'remembered' | 'assumed';
+  weeks: UsageWeek[];
+  pace: {
+    /** How far through the current week we are, 0 to 1. */
+    elapsed: number;
+    projectedTokens: number | null;
+    projectedCost: number | null;
+    /** Percent above or below last week at the same hour. */
+    vsPrior: number | null;
+  };
+  coverage: { from: string | null; to: string | null; files: number };
+  generatedAt: string;
+};
+
+/** One row of the plan meter — the same rows Claude Code lists under /status. */
+export type PlanLimit = {
+  kind: string;
+  group: string;
+  percent: number | null;
+  severity: string;
+  resetsAt: string | null;
+  scope: string | null;
+  isActive: boolean;
+  label: string;
+};
+
+export type PlanLimits = {
+  ok: boolean;
+  /** Why the meter is unavailable, when it is. */
+  reason: string | null;
+  limits: PlanLimit[];
+  extra: {
+    usedCredits: number;
+    monthlyLimit: number | null;
+    utilization: number;
+    currency: string;
+    decimalPlaces: number;
+    spendLimitReached: boolean;
+  } | null;
+  plan: string | null;
+  tier?: string | null;
+  fetchedAt: string;
 };
 
 export type RecentSession = {
@@ -270,7 +545,12 @@ export type RecentSession = {
 export type AppConfig = {
   appName: string;
   labels: { enabled: boolean; noun: string };
-  reports: { enabled: boolean; label: string };
-  /** Whether the `claude` command could be found. Nothing works without it. */
+  reports: { enabled: boolean; label: string; canRun: boolean };
+  billing: { enabled: boolean; label: string; canRun: boolean; canApprove: boolean };
+  /** Which engine new sessions start as. */
+  engine: EngineId;
+  /** Every engine the board knows about, and whether it is installed. */
+  engines: EngineStatus[];
+  /** Whether the `claude` command could be found. */
   claude: { found: boolean; path: string | null };
 };

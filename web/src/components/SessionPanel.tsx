@@ -163,7 +163,7 @@ export function SessionPanel({ card, onChanged, onError, onOpenSession }: Props)
 
       <div className="pane-content">
         {mode === 'summary' ? (
-          <SummaryView card={card} />
+          <SummaryView card={card} onChanged={onChanged} />
         ) : mode === 'files' ? (
           <FilesView sessionId={card.sessionId} refreshKey={refreshKey} onError={onError} />
         ) : mode === 'live' && card.live ? (

@@ -97,6 +97,28 @@ if (!cardCols.some((c) => c.name === 'archived_at')) {
   db.exec('ALTER TABLE cards ADD COLUMN archived_at TEXT');
 }
 
+/*
+ * Which coding agent this card's session is, and — when the two differ — the id
+ * that agent knows the conversation by.
+ *
+ * They differ for exactly one reason. Claude Code accepts `--session-id`, so the
+ * board picks an id, the transcript appears under it, and one id serves as both
+ * the card key and the conversation's name. Codex names its own thread and takes
+ * no such flag, so the card keeps the id the board gave it and `engine_thread`
+ * records the thread Codex actually created. Reopening a codex card resolves
+ * through this column; a null here on a codex card means the thread was never
+ * found, and the card can only be started fresh.
+ *
+ * Cards that predate this get NULL, which reads as Claude — which is what every
+ * one of them is.
+ */
+if (!cardCols.some((c) => c.name === 'engine')) {
+  db.exec('ALTER TABLE cards ADD COLUMN engine TEXT');
+}
+if (!cardCols.some((c) => c.name === 'engine_thread')) {
+  db.exec('ALTER TABLE cards ADD COLUMN engine_thread TEXT');
+}
+
 // A review lane is a column that belongs to the work column on its left.
 if (!columnCols.some((c) => c.name === 'review_of')) {
   db.exec('ALTER TABLE columns ADD COLUMN review_of TEXT');
@@ -131,6 +153,14 @@ for (const [col, type] of [
   if (!cardCols.some((c) => c.name === col)) {
     db.exec(`ALTER TABLE cards ADD COLUMN ${col} ${type}`);
   }
+}
+
+// When this card should come back, as an ISO instant, or NULL for never. Kept
+// separate from `archived` rather than folded into it: closing and scheduling a
+// return are different decisions, and a card can be closed forever, closed until
+// Tuesday, or — in principle — still on the board with a return already set.
+if (!cardCols.some((c) => c.name === 'wake_at')) {
+  db.exec('ALTER TABLE cards ADD COLUMN wake_at TEXT');
 }
 
 /**
@@ -203,6 +233,53 @@ DEFAULT_BOARDS.forEach((board, bi) => {
     );
   }
 });
+
+/**
+ * Unsorted: where a session the board discovered on its own lands.
+ *
+ * Sessions are found by sweeping Claude Code's transcripts, so cards appear
+ * without anyone asking for them — and dropping those into the first column of
+ * a board you curate means the boards you curate are never quite yours. They
+ * come here instead, and stay until you move them somewhere. Nothing sweeps
+ * them onward: the column has no review lane and feeds no inbox, so a card
+ * leaves Unsorted only when you send it.
+ *
+ * Seeded rather than optional, and recreated if it goes missing, because
+ * `ensureCard` has to have somewhere to put a card it was not given a column
+ * for. It sits last so it never becomes the board that opens by default.
+ */
+export const UNSORTED_BOARD = 'unsorted';
+export const UNSORTED_COLUMN = 'unsorted_new';
+
+function seedUnsorted() {
+  if (db.prepare('SELECT 1 FROM boards WHERE id = ?').get(UNSORTED_BOARD)) return;
+  const max = db.prepare('SELECT COALESCE(MAX(position), 0) p FROM boards').get().p;
+  db.transaction(() => {
+    insBoard.run(UNSORTED_BOARD, 'Unsorted', max + 1000);
+    insColumn.run(UNSORTED_COLUMN, 'New', 1000, '#64748b', UNSORTED_BOARD);
+  })();
+}
+seedUnsorted();
+
+/** Where a card with no column of its own goes. */
+function unsortedColumnId() {
+  return (
+    db
+      .prepare('SELECT id FROM columns WHERE board_id = ? ORDER BY position LIMIT 1')
+      .get(UNSORTED_BOARD)?.id ?? null
+  );
+}
+
+/** Live cards on a board — what the tab's badge counts. */
+export function countCardsOnBoard(boardId) {
+  return db
+    .prepare(
+      `SELECT COUNT(*) n FROM cards
+        WHERE archived = 0
+          AND column_id IN (SELECT id FROM columns WHERE board_id = ?)`
+    )
+    .get(boardId).n;
+}
 
 /** Attach a review lane immediately to the right of a work column. */
 export function createReviewLane(workColumnId) {
@@ -371,12 +448,28 @@ function redetectPromptLabels() {
   setSetting('redetected_prompt_matters_v2', true);
 }
 
+// A board can name the label its cards default to — see applyBoardDefaults.
+if (!db.prepare('PRAGMA table_info(boards)').all().some((c) => c.name === 'default_label')) {
+  db.exec('ALTER TABLE boards ADD COLUMN default_label TEXT');
+}
+
 export function listBoards() {
   return db.prepare('SELECT * FROM boards ORDER BY position').all();
 }
 
+/**
+ * The board you get when you haven't picked one — the leftmost tab, except that
+ * Unsorted never counts. It can be dragged anywhere in the row, including the
+ * front, and opening the app onto a pile of unfiled sessions is nobody's idea of
+ * a starting point.
+ */
 export function defaultBoardId() {
-  return db.prepare('SELECT id FROM boards ORDER BY position LIMIT 1').get()?.id ?? 'firm';
+  return (
+    db.prepare('SELECT id FROM boards WHERE id != ? ORDER BY position LIMIT 1').get(UNSORTED_BOARD)
+      ?.id ??
+    db.prepare('SELECT id FROM boards ORDER BY position LIMIT 1').get()?.id ??
+    'firm'
+  );
 }
 
 export function createBoard(name) {
@@ -399,10 +492,57 @@ export function renameBoard(id, name) {
   db.prepare('UPDATE boards SET name = ? WHERE id = ?').run(name, id);
 }
 
+export function setBoardDefaultLabel(id, label) {
+  db.prepare('UPDATE boards SET default_label = ? WHERE id = ?').run(label || null, id);
+}
+
+/**
+ * A board can declare what its cards are about. Firm-admin work all bills to
+ * the firm's own matter, and before this that rule was enforced by hand —
+ * eleven cards labelled the same thing one at a time.
+ *
+ * Deliberately the weakest source of all: 'board' means "nothing better is
+ * known". A manual choice, a folder, or a file number typed into the session
+ * all replace it; clearing it counts as dismissing it; and a card moved off
+ * the board takes nothing with it — the label was the board's, not the card's.
+ */
+export function applyBoardDefaults() {
+  // A 'board' label on a live card that left its board — or whose board changed
+  // its mind — is stale. Archived cards are left as they were attributed: the
+  // past does not get relabelled by moving furniture around.
+  db.prepare(
+    `UPDATE cards SET label = NULL, label_source = NULL, updated_at = datetime('now')
+      WHERE session_id IN (
+        SELECT c.session_id FROM cards c
+        JOIN columns k ON c.column_id = k.id
+        JOIN boards b ON k.board_id = b.id
+        WHERE c.label_source = 'board' AND c.archived = 0
+          AND (b.default_label IS NULL OR b.default_label <> c.label)
+      )`
+  ).run();
+
+  const rows = db.prepare(
+    `SELECT c.session_id, b.default_label AS label FROM cards c
+      JOIN columns k ON c.column_id = k.id
+      JOIN boards b ON k.board_id = b.id
+      WHERE b.default_label IS NOT NULL AND c.archived = 0 AND c.label IS NULL
+        AND (c.label_dismissed IS NULL OR c.label_dismissed <> b.default_label)`
+  ).all();
+  const set = db.prepare(
+    `UPDATE cards SET label = ?, label_source = 'board', updated_at = datetime('now')
+      WHERE session_id = ?`
+  );
+  for (const r of rows) set.run(r.label, r.session_id);
+  return rows.length;
+}
+
 /** Deleting a board moves its cards to the first column of the board that remains. */
 export function deleteBoard(id) {
   const boards = listBoards();
   if (boards.length <= 1) throw new Error('Cannot delete the last board');
+  if (id === UNSORTED_BOARD) {
+    throw new Error('Unsorted is where new sessions land, so it cannot be deleted');
+  }
   const fallbackBoard = boards.find((b) => b.id !== id);
   const fallbackColumn = db
     .prepare('SELECT id FROM columns WHERE board_id = ? ORDER BY position LIMIT 1')
@@ -516,13 +656,32 @@ export function listCards() {
  * in the leftmost column. After that the row is authoritative — moving a card
  * persists here and survives restarts, renames and Claude Code upgrades.
  */
-export function ensureCard(sessionId, { columnId = null, title = null, cwd = null } = {}) {
+export function ensureCard(
+  sessionId,
+  { columnId = null, title = null, cwd = null, engine = null, engineThread = null } = {}
+) {
   const existing = db.prepare('SELECT * FROM cards WHERE session_id = ?').get(sessionId);
-  if (existing) return existing;
+  if (existing) {
+    // A card the board made before it knew what engine the session was — or one
+    // that predates the column entirely — learns it the first time a scan says
+    // so. Never overwritten once set: the engine a conversation was started in
+    // is not something a later reading gets to change its mind about.
+    if (engine && !existing.engine) {
+      db.prepare('UPDATE cards SET engine = ? WHERE session_id = ?').run(engine, sessionId);
+      existing.engine = engine;
+    }
+    if (engineThread && !existing.engine_thread) {
+      db.prepare('UPDATE cards SET engine_thread = ? WHERE session_id = ?').run(engineThread, sessionId);
+      existing.engine_thread = engineThread;
+    }
+    return existing;
+  }
 
-  // A newly discovered session lands in the first column of the default board.
+  // A session started from the board names its column. One the board merely
+  // found — or made for itself, like a routine's run — lands in Unsorted.
   const target =
     (columnId && db.prepare('SELECT id FROM columns WHERE id = ?').get(columnId)?.id) ||
+    unsortedColumnId() ||
     db
       .prepare('SELECT id FROM columns WHERE board_id = ? ORDER BY position LIMIT 1')
       .get(defaultBoardId())?.id ||
@@ -534,10 +693,55 @@ export function ensureCard(sessionId, { columnId = null, title = null, cwd = nul
     .get(target).p;
 
   db.prepare(
-    'INSERT INTO cards (session_id, column_id, position, title, cwd) VALUES (?, ?, ?, ?, ?)'
-  ).run(sessionId, target, max + 1000, title, cwd);
+    `INSERT INTO cards (session_id, column_id, position, title, cwd, engine, engine_thread)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(sessionId, target, max + 1000, title, cwd, engine, engineThread);
 
   return db.prepare('SELECT * FROM cards WHERE session_id = ?').get(sessionId);
+}
+
+/**
+ * Record which Codex thread a card's session turned out to be.
+ *
+ * Called once, seconds after a codex session starts, when its rollout appears
+ * on disk — see `findNewThread` in codex.js. Everything that has to reach the
+ * real conversation afterwards (reopening it, reading its transcript, listing
+ * what it wrote) goes through this.
+ */
+export function setEngineThread(sessionId, engine, engineThread) {
+  db.prepare(
+    "UPDATE cards SET engine = ?, engine_thread = ?, updated_at = datetime('now') WHERE session_id = ?"
+  ).run(engine, engineThread, sessionId);
+  return getCard(sessionId);
+}
+
+/**
+ * The bridge between what Codex calls a thread and what the board calls a card.
+ *
+ * `codexAliases()` maps thread -> card, which is what the scan needs to file a
+ * discovered rollout under the card that started it. `{ byCard: true }` maps the
+ * other way, for reopening a card whose thread id is the only thing Codex will
+ * answer to.
+ */
+export function codexAliases({ byCard = false } = {}) {
+  const rows = db
+    .prepare("SELECT session_id, engine_thread FROM cards WHERE engine = 'codex' AND engine_thread IS NOT NULL")
+    .all();
+  const out = new Map();
+  for (const r of rows) {
+    if (r.engine_thread === r.session_id) continue; // nothing to translate
+    if (byCard) out.set(r.session_id, r.engine_thread);
+    else out.set(r.engine_thread, r.session_id);
+  }
+  return out;
+}
+
+/** Every Codex thread the board has already attached to a card. */
+export function knownCodexThreads() {
+  const rows = db
+    .prepare("SELECT engine_thread FROM cards WHERE engine = 'codex' AND engine_thread IS NOT NULL")
+    .all();
+  return new Set(rows.map((r) => r.engine_thread));
 }
 
 /** A card you write yourself. It has no session until you start one for it. */
@@ -599,14 +803,121 @@ export function restoreCard(sessionId) {
   return columnId;
 }
 
+/**
+ * Close a card now, and put it back on the board at `wakeAt`.
+ *
+ * For work that is finished but not settled — something to look at again after
+ * the other side responds, or once a deadline is closer. Passing null cancels a
+ * scheduled return without reopening the card, so a card you closed until
+ * Tuesday can become one you simply closed.
+ */
+export function snoozeCard(sessionId, wakeAt) {
+  ensureCard(sessionId);
+  if (wakeAt === null) {
+    db.prepare("UPDATE cards SET wake_at = NULL, updated_at = datetime('now') WHERE session_id = ?")
+      .run(sessionId);
+    return null;
+  }
+
+  const when = new Date(wakeAt);
+  if (Number.isNaN(when.getTime())) throw new Error('That is not a date I can read');
+
+  const iso = when.toISOString();
+  db.prepare(
+    `UPDATE cards
+        SET wake_at = ?, archived = 1, archived_at = COALESCE(archived_at, datetime('now')),
+            updated_at = datetime('now')
+      WHERE session_id = ?`
+  ).run(iso, sessionId);
+  return iso;
+}
+
+/**
+ * The column a waking card lands in: the first on its own board.
+ *
+ * Review lanes are skipped — they belong to the column on their left and are not
+ * somewhere work starts. If the board it came from is gone, the default board's
+ * first column is better than leaving the card nowhere.
+ */
+function wakeColumnFor(card) {
+  const board =
+    db.prepare('SELECT board_id FROM columns WHERE id = ?').get(card.column_id)?.board_id ??
+    defaultBoardId();
+
+  const pick = (where) =>
+    db
+      .prepare(`SELECT id FROM columns WHERE board_id = ? ${where} ORDER BY position LIMIT 1`)
+      .get(board)?.id ?? null;
+
+  return pick('AND review_of IS NULL') ?? pick('');
+}
+
+/**
+ * Cards whose return time has passed, put back on the board.
+ *
+ * Unlike a routine, this backfills, and the difference is deliberate. A routine
+ * that missed its slot is not worth running late — a morning brief for a morning
+ * that is over is noise. A card is the opposite: the entire reason you scheduled
+ * it is so that it turns up whether or not you happened to have the app open that
+ * day. So the test is "due at any point in the past", never "due today".
+ *
+ * A card with nowhere to land keeps its wake_at and is tried again next sweep,
+ * rather than being silently woken into nothing.
+ */
+export function wakeDueCards() {
+  const due = db
+    .prepare(
+      "SELECT * FROM cards WHERE wake_at IS NOT NULL AND datetime(wake_at) <= datetime('now')"
+    )
+    .all();
+  if (!due.length) return [];
+
+  const woken = [];
+  db.transaction(() => {
+    for (const card of due) {
+      const columnId = wakeColumnFor(card);
+      if (!columnId) continue;
+
+      /*
+       * Straight to the top. You decided in the past that today is the day you
+       * look at this again, and a card that comes back below a month of backlog
+       * has not really come back.
+       */
+      const top = db
+        .prepare('SELECT COALESCE(MIN(position), 0) p FROM cards WHERE column_id = ? AND archived = 0')
+        .get(columnId).p;
+
+      db.prepare(
+        `UPDATE cards
+            SET wake_at = NULL, archived = 0, archived_at = NULL, column_id = ?, position = ?,
+                auto_moved_activity = NULL, updated_at = datetime('now')
+          WHERE session_id = ?`
+      ).run(columnId, top - 1000, card.session_id);
+
+      woken.push({ sessionId: card.session_id, title: card.title, columnId });
+    }
+  })();
+
+  return woken;
+}
+
 /** Permanent — only reachable from the archive. */
 export function deleteCard(sessionId) {
   db.prepare('DELETE FROM cards WHERE session_id = ?').run(sessionId);
 }
 
+/**
+ * Closed cards, newest first — except those with a return scheduled, which come
+ * first and in the order they are due. Those are the only closed cards still
+ * waiting on something, so the archive doubles as the list of what is coming
+ * back and when.
+ */
 export function listArchivedCards() {
   return db
-    .prepare('SELECT * FROM cards WHERE archived = 1 ORDER BY COALESCE(archived_at, updated_at) DESC')
+    .prepare(
+      `SELECT * FROM cards WHERE archived = 1
+        ORDER BY (wake_at IS NULL), wake_at, COALESCE(archived_at, updated_at) DESC`
+    )
     .all();
 }
 
@@ -675,6 +986,14 @@ export function setPriority(sessionId, priority) {
  */
 export function setCardLabel(sessionId, label, source = 'manual') {
   ensureCard(sessionId);
+  // Clearing a board-default label is an answer too: remember it as dismissed,
+  // or the next defaults pass would put the same label straight back.
+  const prev = getCard(sessionId);
+  const dismissBoard = !label && prev?.label_source === 'board' ? prev.label : null;
+  if (dismissBoard) {
+    db.prepare("UPDATE cards SET label_dismissed = ? WHERE session_id = ?")
+      .run(dismissBoard, sessionId);
+  }
   db.prepare(
     `UPDATE cards
         SET label = ?, label_source = ?, label_suggested = NULL, updated_at = datetime('now')
@@ -762,5 +1081,11 @@ export function deleteColumn(id) {
 
 export function reorderColumns(orderedIds) {
   const upd = db.prepare('UPDATE columns SET position = ? WHERE id = ?');
+  db.transaction(() => orderedIds.forEach((id, i) => upd.run((i + 1) * 1000, id)))();
+}
+
+/** The order of the tabs in the second row, left to right. */
+export function reorderBoards(orderedIds) {
+  const upd = db.prepare('UPDATE boards SET position = ? WHERE id = ?');
   db.transaction(() => orderedIds.forEach((id, i) => upd.run((i + 1) * 1000, id)))();
 }

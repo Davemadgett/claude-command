@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { FolderPicker } from './FolderPicker';
-import type { ColumnChoice } from '../types';
+import type { ColumnChoice, EngineStatus } from '../types';
 
 type Props = {
   defaultColumnId?: string;
   labelsEnabled: boolean;
   labelNoun: string;
+  /** The engine the board is set to — named here so it isn't a surprise. */
+  engine?: EngineStatus | null;
   onClose: () => void;
   onCreated: (sessionId: string) => void;
   onError: (message: string) => void;
@@ -16,6 +18,7 @@ export function NewSessionDialog({
   defaultColumnId,
   labelsEnabled,
   labelNoun,
+  engine,
   onClose,
   onCreated,
   onError,
@@ -103,16 +106,17 @@ export function NewSessionDialog({
     <>
       <div className="overlay-bg" onClick={onClose}>
         <div className="dialog" onClick={(e) => e.stopPropagation()}>
-          <h2>New Claude session</h2>
+          <h2>New {engine?.name ?? 'Claude Code'} session</h2>
           <p className="sub">
-            Starts <code>claude</code> in a terminal this board owns, so you can work in it from here.
+            Starts <code>{engine?.id === 'codex' ? 'codex' : 'claude'}</code> in a terminal this
+            board owns, so you can work in it from here. Change which one in the header.
           </p>
 
           <div className="field">
             <label>Folder to work in</label>
             <p className="field-help">
-              The folder Claude can read and write. Browse for it, drag it in from Finder, or type
-              a path — <code>downloads</code> and <code>~/code/thing</code> both work.
+              The folder the session can read and write. Browse for it, drag it in from Finder, or
+              type a path — <code>downloads</code> and <code>~/code/thing</code> both work.
             </p>
             <div className="row">
               <input

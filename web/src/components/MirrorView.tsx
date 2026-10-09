@@ -64,90 +64,93 @@ function plainText(text: string): string {
 /**
  * Text that arrives as a user turn but that you never typed: the body of a skill
  * Claude Code expanded, the caveat it wraps local commands in, the echo of a
- * command's own output. It belongs to the machinery, and reading a session out
- * loud you would skip every line of it. The technical view still shows it.
+ * command's own output, the reminders the harness injects. It belongs to the
+ * machinery, and reading a session back you would skip every line of it. The
+ * technical view still shows it.
  */
 const MACHINERY = [
   /^Base directory for this skill:/i,
   /^Caveat: The messages below were generated/i,
   /^<local-command/i,
+  /^<command-/i,
+  /^<system-reminder/i,
   /^\[Request interrupted/i,
 ];
 
 const isMachinery = (text: string) => MACHINERY.some((re) => re.test(text.trim()));
 
-type Action = { verb: string; targets: string[] };
+/** Reminders are injected mid-prompt as well as sent alone. */
+const stripReminders = (text: string) =>
+  text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+
+type Turn = { key: string; role: 'user' | 'assistant'; text: string; timestamp?: string | null };
 
 /**
- * Consecutive calls of the same kind read as one line. Nine separate "Read a
- * file" bullets tell you less than "Read 9 files", and take nine times the room.
+ * The conversation, and nothing else.
+ *
+ * Two rules do all the work. Only text survives — no tool calls, no results, no
+ * thinking, not even the tally of what was read or written, because the point of
+ * this view is what was *said*. And an assistant turn that ends in a tool call is
+ * Claude talking to itself on the way somewhere ("let me check the file"), so only
+ * turns that are purely text are kept: those are the ones addressed to you.
+ *
+ * Where several prose turns run together — Claude saying what it is about to do,
+ * working, then answering — the answer is the last one, so that is what the
+ * bubble shows. The exception is a one-line sign-off ("Done."), which on its own
+ * tells you nothing; there the substantive turn it followed is kept as well.
  */
-function actionsOf(blocks: Block[]): Action[] {
-  const out: Action[] = [];
-  for (const b of blocks) {
-    if (b.type !== 'tool_use' || !b.verb) continue;
-    const last = out[out.length - 1];
-    if (last && last.verb === b.verb) last.targets.push(b.target ?? '');
-    else out.push({ verb: b.verb, targets: [b.target ?? ''] });
+const SIGN_OFF = 200;
+const SUBSTANTIVE = 400;
+
+function chatTurns(messages: Message[]): Turn[] {
+  const turns: Turn[] = [];
+
+  for (const m of messages) {
+    const working = m.role === 'assistant' && m.blocks.some((b) => b.type === 'tool_use');
+    if (working) continue;
+
+    const text = m.blocks
+      .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
+      .map((b) => (m.role === 'user' ? stripReminders(b.text) : b.text))
+      .filter((t) => t && !(m.role === 'user' && isMachinery(t)))
+      .map(plainText)
+      .filter(Boolean)
+      .join('\n\n');
+
+    // A turn made entirely of tool results is the session talking to itself.
+    if (!text) continue;
+
+    const last = turns[turns.length - 1];
+    if (last && last.role === m.role && m.role === 'assistant') {
+      last.text =
+        text.length < SIGN_OFF && last.text.length > SUBSTANTIVE
+          ? `${last.text}\n\n${text}`
+          : text;
+      last.timestamp = m.timestamp;
+      continue;
+    }
+    turns.push({ key: m.uuid, role: m.role, text, timestamp: m.timestamp });
   }
-  return out;
+
+  return turns;
 }
 
-function actionLine({ verb, targets }: Action): string {
-  const named = [...new Set(targets.filter(Boolean))];
-  if (!named.length) return `${verb} ${targets.length} time${targets.length === 1 ? '' : 's'}`;
-  if (named.length <= 2) return `${verb} ${named.join(', ')}`;
-  return `${verb} ${named.slice(0, 2).join(', ')} +${named.length - 2} more`;
-}
-
-/** A failed step is the one piece of machinery worth keeping — it changes the story. */
-function failures(blocks: Block[]): number {
-  return blocks.filter((b) => b.type === 'tool_result' && b.isError).length;
-}
-
-function CleanMessage({ message }: { message: Message }) {
-  const texts = message.blocks
-    .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
-    .filter((b) => !(message.role === 'user' && isMachinery(b.text)))
-    .map((b) => plainText(b.text))
-    .filter(Boolean);
-
-  // A turn made entirely of tool results is the session talking to itself.
-  if (message.role === 'user' && !texts.length) return null;
-
-  const actions = message.role === 'assistant' ? actionsOf(message.blocks) : [];
-  const failed = message.role === 'assistant' ? failures(message.blocks) : 0;
-  if (!texts.length && !actions.length) return null;
-
+function Bubble({ turn }: { turn: Turn }) {
   return (
-    <div className="mirror-msg clean">
-      <div className={`mirror-role ${message.role}`}>
-        <span>{message.role === 'user' ? 'You' : 'Claude'}</span>
-        {message.timestamp && (
-          <span className="when">{new Date(message.timestamp).toLocaleString()}</span>
+    <div className={`chat-row ${turn.role}`}>
+      <div className="chat-bubble">
+        {turn.text}
+        {turn.timestamp && (
+          <span className="chat-when">
+            {new Date(turn.timestamp).toLocaleString([], {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })}
+          </span>
         )}
       </div>
-
-      {texts.map((t, i) => (
-        <div key={i} className="mirror-text">
-          {t}
-        </div>
-      ))}
-
-      {actions.length > 0 && (
-        <div className="mirror-actions">
-          {actions.map((a, i) => (
-            <div key={i} className="did">
-              {actionLine(a)}
-            </div>
-          ))}
-          {failed > 0 && (
-            <div className="did failed">
-              {failed} step{failed === 1 ? '' : 's'} failed
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -201,8 +204,9 @@ export function MirrorView({ sessionId, refreshKey }: { sessionId: string; refre
   }
   if (!data) return <div className="pane-empty">Loading transcript…</div>;
 
+  const turns = clean ? chatTurns(data.messages) : [];
   const rendered = clean
-    ? data.messages.map((m) => <CleanMessage key={m.uuid} message={m} />).filter(Boolean)
+    ? turns.map((t) => <Bubble key={t.key} turn={t} />)
     : data.messages.map((m) => (
         <div key={m.uuid} className="mirror-msg">
           <div className={`mirror-role ${m.role}`}>
@@ -214,11 +218,11 @@ export function MirrorView({ sessionId, refreshKey }: { sessionId: string; refre
       ));
 
   return (
-    <div className="mirror" ref={scrollRef}>
+    <div className={`mirror${clean ? ' chat' : ''}`} ref={scrollRef}>
       <div className="mirror-toolbar">
         <div className="seg small">
           <button className={clean ? 'on' : ''} onClick={() => setClean(true)}>
-            Conversation
+            Chat
           </button>
           <button
             className={clean ? '' : 'on'}
@@ -237,6 +241,14 @@ export function MirrorView({ sessionId, refreshKey }: { sessionId: string; refre
       {rendered}
 
       {data.messages.length === 0 && <div className="pane-empty">This transcript is empty.</div>}
+      {clean && data.messages.length > 0 && turns.length === 0 && (
+        <div className="pane-empty">
+          <div>Nothing said yet</div>
+          <div className="hint">
+            This session has been working but hasn’t answered in prose. Technical shows what it did.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

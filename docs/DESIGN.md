@@ -86,7 +86,7 @@ Claude Command makes every session a card, and every card carry its context:
 | What am I working on? | Sessions discovered from `~/.claude/projects/` |
 | Which label is this? | The folder it ran in, or the label folder it wrote files into |
 | What did Claude actually do? | Tool calls counted from the transcript |
-| What did it produce? | Write-tool calls, plus an mtime sweep of the working directory |
+| What did it produce? | Write-tool calls, document paths named in the transcript that changed during the session, plus an mtime sweep of a project cwd |
 | Where are the documents? | The label's folder, indexed from disk |
 | Where does it live upstream? | Deep link, from the label index |
 | What's due? | macOS Calendar, matched on file number |
@@ -101,7 +101,7 @@ Three processes, one of which owns the other two.
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Claude Command.app          (Swift / AppKit / WKWebView)      │
-│  • owns the window, menus, zoom, JS dialogs                  │
+│  • owns the windows, menus, zoom, JS dialogs                 │
 │  • spawns and reaps the node server                          │
 │  • opens external links in the default browser               │
 └───────────────┬──────────────────────────────────────────────┘
@@ -128,6 +128,45 @@ belongs to someone else.
 and zoom, and — the deciding factor — a place to hold the PTYs that isn't a tab
 you might close by accident.
 
+### More than one window
+
+⇧⌘N opens another board window, ⌘T another tab of one. Every window is a view
+of the same server, so a card moved in one moves in the other; what differs is
+where each window is pointed. (The other keys — ⌘N new session, ⌘F find card,
+⌘B brief, ⇧⌘B billing, ⌘U usage — are menu items too, calling into a small `window.__app` bridge the page exposes;
+a menu key equivalent is the only kind that still fires while xterm has focus.) On a desk with several displays that is the whole point — the board on
+one screen, a session's terminal on another, the calendar on a third — and it is
+why the board never had to grow its own split-pane layout.
+
+Three things make that usable rather than merely possible:
+
+- **A new window opens on a screen that hasn't got one yet** — the display under
+  the pointer if it is free, otherwise the first free display, and only when
+  every display is occupied does it cascade off the last window.
+- **The layout comes back.** Every open window's frame is written to
+  `boardWindowFrames` on quit, and on the way out of the *last* close, so
+  quitting by closing windows restores what you had rather than erasing it. An
+  empty list is never saved. Frames that land on a display that is no longer
+  attached are pulled back on screen by `ensureOnScreen`.
+- **Each window remembers its own section.** The shell opens window *N* as
+  `/?w=N`, and `perWindow()` in the web app keys `view` and `boardId` by that
+  number, so window 2 stays on the calendar while window 1 stays on the board.
+  Window 1 uses the unsuffixed keys, so nothing already saved is lost and a plain
+  browser tab is unaffected.
+
+Sheets — the JS dialogs and the folder picker — attach to the window that asked,
+not to whichever window is frontmost, which is why the bridge and the UI delegate
+live on the window object rather than on the app delegate. The message handler is
+registered through a weak `BridgeProxy`, because `WKUserContentController` retains
+its handlers and a closed window would otherwise never be freed.
+
+Zoom is per window (a laptop screen and a 32" display want different sizes); the
+last zoom set is what the next new window opens at.
+
+One thing macOS does on its own: if the app had a window in full screen, the
+first window of a relaunch is adopted back into that Space, whatever frame it was
+given. Later windows are placed as asked.
+
 ### Ports and paths
 
 | | |
@@ -144,13 +183,24 @@ you might close by accident.
 ## 4. Core concepts
 
 ### Session
-A Claude Code conversation, discovered by scanning `~/.claude/projects/*/*.jsonl`.
-Never created by the board unless you ask for one. Transcripts are **read only** —
-nothing in this system edits or deletes them.
+A conversation with a coding agent, discovered by scanning what that agent wrote
+to disk — `~/.claude/projects/*/*.jsonl` for Claude Code, `~/.codex/sessions/
+YYYY/MM/DD/rollout-*.jsonl` for Codex. Never created by the board unless you ask
+for one. Transcripts are **read only** — nothing in this system edits or deletes
+them.
 
-Only sessions Claude Code records as interactive (`entrypoint: cli`) become cards.
-Automation pipelines run as `sdk-cli`; including them would bury the
-board under hundreds of headless runs.
+Only interactive sessions become cards. Claude Code marks those `entrypoint:
+cli`; automation pipelines run as `sdk-cli`, and including them would bury the
+board under hundreds of headless runs. The Codex equivalent is the `originator`
+field: `codex-tui` is a terminal session, and anything else — `Codex Desktop`,
+`codex_work_desktop` — is the ChatGPT app's own window, which is somebody else's
+surface and not a card here.
+
+### Engine
+Which coding agent a session is: **Claude Code** or **Codex**. One switch in the
+header decides what the next session starts as, and it governs every path that
+opens a terminal — the new-session dialog, a hand-written card, a calendar event,
+a scheduled routine. See §4a.
 
 ### Card
 A session's representation on the board. Cards are deliberately spare — status,
@@ -182,6 +232,92 @@ in its header.
 
 ---
 
+## 4a. Two engines
+
+The board runs Claude Code sessions and Codex sessions. A switch beside **+ New
+session** decides which one the next session is; it is board-wide and persists
+across restarts.
+
+**The switch is about what starts next, not about what already exists.** A card
+reopens in the engine it was started in, whatever the switch says now. Anything
+else would either fail outright or — worse — quietly open an unrelated
+conversation under a card you trusted.
+
+Only Codex cards carry an engine badge. A board that is almost entirely Claude
+gains nothing from a "Claude" badge on every card; what you need to see is the
+one that is different.
+
+### Where the two genuinely differ
+
+Almost all of the difference is in one fact, and everything else follows from it.
+
+**Claude Code accepts `--session-id`.** The board picks an id, hands it over, and
+the transcript appears under that name. One id is both the card key and the
+conversation's name.
+
+**Codex names its own thread.** There is no flag to override it and no way to ask
+the process what it got. So a codex card keeps the id the board gave it, and the
+thread id is recorded beside it — `cards.engine_thread` — once the rollout shows
+up on disk.
+
+Finding it is `server/adopt.js`, and the shape of that file is dictated by a
+measured fact: **Codex writes nothing to `~/.codex/sessions` when it launches.**
+Not a header, not an empty file. The rollout appears when the first message is
+actually sent — after the trust prompt on a new folder, after the MCP servers
+finish starting (twenty seconds and up on a machine with several connectors),
+and after you have finished deciding what to type. So the watch lives as long as
+the session does rather than for a fixed window: a card that gets adopted an hour
+late still works, and a fixed window would have produced a card that behaves
+perfectly right up until the day you try to reopen it.
+
+A session closed without a word said produces no thread at all. Nothing breaks
+and nothing lies — the card keeps its own id and offers *Start* rather than
+*Resume*, because there is no conversation to resume.
+
+### What is weaker on the Codex side, and why it is left that way
+
+**File attribution.** A Claude session announces every write as a Write/Edit tool
+call with the path in it. Codex records `apply_patch` with full paths — which the
+board reads — but it can also write by running a shell command, which is recorded
+only as the command. A codex session that generates a document from a script is
+therefore attributed by its working directory alone, and if that directory is not
+a label folder it stays unattributed.
+
+That is the same trade the rest of this program makes, and it is deliberate: an
+unattributed session is honest, a wrongly attributed one bills the wrong client.
+Nothing was added here that guesses a label from a path the session merely read.
+
+**Usage and spend.** The Usage tab reads Claude Code's own token accounting and
+plan limits. Codex records its token counts in a different vocabulary against a
+different plan, and mixing the two into one number would produce a figure that
+means nothing. Codex sessions are simply absent from that tab.
+
+### Where the code lives
+
+| File | What it owns |
+|---|---|
+| `server/engines.js` | The registry: binary, resume syntax, which engine is current |
+| `server/codex.js` | Reading rollouts — sessions, transcript, files, time, prompts |
+| `server/adopt.js` | Finding the thread a started session turned out to be |
+| `server/sessions-io.js` | The three primitives both readers share |
+| `server/pty.js` | Resolving each binary; spawning with the right arguments |
+
+`server/sessions.js` merges the two scans and hands on one kind of object, so the
+board, the cards, the mirror and the time log never branch on which engine wrote
+what.
+
+### Finding the binaries
+
+A login shell is asked first, then a list of well-known locations. The case the
+login shell misses is a shell **alias**, and it is not exotic: the ChatGPT desktop
+app ships the Codex CLI inside its bundle, and the usual way to reach it is
+`alias codex="/Applications/ChatGPT.app/Contents/Resources/codex"` in `.zshrc` —
+which a non-interactive shell never reads and a spawned process could not execute
+anyway. That bundle path is in the candidate list for exactly that reason.
+Anything stranger is what `engines.<id>.bin` in `config.json` is for.
+
+---
+
 ## 5. The sections
 
 ### Board
@@ -204,7 +340,39 @@ The panel has four modes:
   started begins it instead of failing with *"No conversation found with session
   ID"*. Either way the session keeps the card's id, so the card follows it.
 - **Mirror** — the rendered transcript for a session the board doesn't own.
-- **Files** — what the session produced (§7).
+- **Files** — what the session produced. The current .pdf and .docx files are the
+  list — a copy in a `_Superseded/` folder (or moved into one after the session
+  wrote it), a scratchpad working copy, or a file since removed is folded into a
+  collapsed group, so the top row is the document to open;
+  markdown sits behind a toggle that is off by default, and scripts and other
+  files behind a second. Three sources, each labelled on its row: *written* (a
+  Write call), *generated* (a document path the transcript names — in a command,
+  a script's output, or the reply — that changed at or after the moment the
+  transcript first named it, so a file that predates the session stays out; this is how script-built .docx in a Dropbox matter
+  folder gets found — and a bare `SAVED 01 First Amended Complaint.docx` with
+  no folder is resolved against every folder the session itself named, because
+  that is how build scripts announce their output), *arrived during the session* (named in the transcript,
+  already on disk when named, but newer than the session's start — a Court
+  Watch download the session then handled), and *changed while it ran* (the
+  mtime sweep of the cwd). The sweep is skipped when the cwd
+  is the home folder, because there it would list every court PDF that landed in
+  Downloads as if the session had made it.
+
+### Live
+Every running session side by side, each a real terminal. A tile is *working*
+while Claude is producing output and *idle* once the transcript goes quiet.
+
+Every tile is also a `claude` process holding its conversation in memory —
+250–500 MB each — and sessions started from the board are never closed on their
+own, so a board left up for a week accumulates dozens and several gigabytes.
+The header says how many and how much; **✕** closes one and the sweep closes
+everything idle past a threshold. Closing is not destructive and the wording
+says so: the process ends, the transcript, the card and the ability to resume
+all stay. The sweep never touches a *working* session however long its
+transcript has been quiet, because that is the one case where idle time lies.
+
+### Usage
+What the sessions are actually spending, refreshed every few seconds (§8.5).
 
 ### Calendar
 Upcoming events from every macOS calendar, grouped by day, each label event
@@ -409,6 +577,140 @@ it was worked won't net out.
 
 ---
 
+## 8.5 Usage
+
+Every assistant turn Claude Code writes carries the API's own `usage` block —
+input, output, cache reads, cache writes, a model and a timestamp. That is the
+only token ledger on the machine, and it is exact: these are the numbers
+Anthropic billed, not an estimate of them.
+
+**Two things it is not, and the panel says both in its own footer.**
+
+The token counts are not a plan meter, and no arithmetic turns them into one:
+the plan is an allowance measured in Anthropic's units, not in tokens. So the
+token bars are scaled against *the busiest equivalent stretch of the same
+window* — "78% of your busiest 5 hours this week" is a question this data can
+answer, where "78% of your limit" would be invented. The real headroom figure
+comes from somewhere else entirely; see the plan meter below.
+
+And the dollars are list API prices for the tokens spent, not what a
+subscription paid. They are there because *4.8M tokens* says nothing about
+whether one matter is expensive and another isn't, and *$386* does.
+
+Three things make it cheap enough to poll every 5 seconds:
+
+- **Incremental reads.** A transcript only ever grows, so each pass reads the
+  bytes appended since the last one and remembers the offset, stopping at the
+  last complete line so a half-written one isn't lost. First pass over a week:
+  about a second for ~400 MB. Every pass after it: a `stat()` per file.
+- **Regex, not `JSON.parse`.** Nearly all of that is prompts and tool output
+  this never looks at; parsing all of it to read six integers costs roughly
+  fifty times as much. Every field sits at a fixed place relative to `"usage"`
+  — the model before it, the timestamp and requestId after — so the first match
+  on the correct side is the top-level one and the repeats inside `iterations`
+  are never picked up.
+- **requestId is the unit, not the line.** Claude Code writes one line per
+  content block of the same assistant turn, each carrying an identical copy of
+  the usage. Counting lines multiplies the bill by however many blocks the turn
+  happened to have.
+
+**Two double-counting traps, both handled, both silent if they aren't.** A
+subagent's result is echoed back into the *parent* transcript as a `user` line
+whose `toolUseResult` carries a copy of the subagent's usage — the sidechain
+transcript bills those tokens, so lines carrying a tool result are skipped. And
+the discriminator has to be `"role":"assistant"` inside `message`, not the
+top-level `"type":"assistant"`, which on a real assistant line comes *after* the
+usage block. The invariant to test against: `byLabel` and `byModel` must each
+sum exactly to the week total.
+
+**The walk has to be recursive, and that is not a detail.** Transcripts live at
+`projects/<project>/<sessionId>.jsonl`, but a session's subagents write to
+`projects/<project>/<sessionId>/subagents/agent-*.jsonl` — one level down. On
+this machine that nesting holds **40% of every token ever spent** (2.5B of 6.4B;
+19,449 of 37,217 billed requests), because a subagent does its own reading and
+its own thinking and hands back only a summary. A walk that stopped at the top
+level combined with the `toolUseResult` skip above to drop that spend at *both*
+ends: the parent's copy was skipped as a duplicate of a file that was never
+read. The skip is only correct if the sidechain is scanned.
+
+Subagent spend is attributed to the session that spawned it — the directory
+holding `subagents/` is named for it — not to its own id. The work was done for
+that matter, and `agent-a95a89bee0a15240a` is a name nothing else on the board
+can resolve. requestIds were checked for cross-file reuse before relying on
+this: across 37,316 distinct ids, **zero** appear in more than one transcript,
+so per-file dedupe is exact and a whole-history scan cannot double-count.
+
+### 8.5.2 Week over week (`server/history.js`)
+
+`buildUsage` answers "what is happening now" and holds eight days to do it.
+`buildHistory` answers the slower question — is this week heavier than the last
+five — and to do that it reads *everything*: ~1.5 GB across ~880 transcripts.
+
+**The weeks are the plan's weeks.** The subscription resets on a Friday evening,
+so a Monday-to-Sunday chart would cut every week in two and neither half would
+mean anything. The boundary comes from the same `weekly_all` reset that feeds the
+plan meter, rounded to the minute, and is remembered in the cache file — the
+chart keeps its shape while the machine is offline, and says so (`anchorSource`
+is `plan`, `remembered`, or `assumed`).
+
+Three things make a full scan affordable:
+
+- **It is genuinely fast.** Regexes over lines that mostly don't match: the whole
+  history reads in about 3.4 s.
+- **It happens once.** Every file's 5-minute buckets are cached against its size
+  and mtime and written to `data/usage-history.json`, so a restart re-reads only
+  what changed — for a transcript finished last Tuesday, nothing. Cold 3.4 s,
+  warm 0 ms. The cache carries a fingerprint of the price table, because it
+  stores *costs*, and an edit to the prices would otherwise leave last month
+  charted at rates that no longer apply.
+- **It yields.** 3.4 s of straight-line work would freeze the board for 3.4 s —
+  there is one thread. The scan hands control back every dozen files, and reads
+  each file in 8 MB chunks so a 200 MB transcript doesn't spike memory (248 MB
+  heap for the full pass; slurping whole files instead reached 2.8 GB).
+
+**A half-finished week cannot be compared to a finished one**, and a chart that
+tries is worse than no chart — every Monday would look like a quiet week. So
+each past week also reports `toDate`: what it had spent by the same hour the
+current week has reached. The current bar carries a tick at last week's `toDate`
+and a hollow cap at the current pace's projection, and the legend states the
+comparison in words.
+
+Attribution reuses §6 unchanged, including its "unattributed is better than
+wrong" rule — the unattributed row is shown rather than hidden, because on a
+week of work it is usually the largest one and pretending otherwise would make
+every other row look bigger than it is.
+
+### 8.5.1 Plan limits (`server/limits.js`)
+
+The percentages at the top of the panel are the only figures in it that do not
+come from disk. They are the same ones Claude Code prints under
+`/status → Usage`, fetched the same way it fetches them:
+`GET https://api.anthropic.com/api/oauth/usage`, authorized with the OAuth
+token Claude Code stores in the login keychain under `Claude Code-credentials`.
+`security` inherits the server's keychain access, so the read is silent for a
+server the same user started and simply fails — rather than prompting — for one
+that isn't.
+
+Three deliberate constraints:
+
+- **No token refresh, ever.** The credential belongs to Claude Code; racing it
+  over a refresh could sign the whole machine out. An expired or rejected token
+  is reported as a message and waited out — any running session renews it within
+  the hour and writes the new one back, where the next poll finds it.
+- **Render whatever comes back.** The response carries a `limits` array
+  (`session`, `weekly_all`, and a `weekly_scoped` row per model), not fixed
+  keys, so a new cap or a promo window appears on the wall without a code
+  change. Nothing here names the limits it knows about today.
+- **Failure is local.** The meter is a separate endpoint and a separate poll
+  from `/api/usage`, cached 60 s on success and 15 s on failure. An offline
+  machine loses three bars; the token counts underneath are still exact.
+
+One formatting trap worth keeping: weekly resets come back at `:59:59`, which
+truncates to the hour before and reads an hour early. Round to the nearest
+minute before formatting, as `/status` does.
+
+---
+
 ## 9. Data model
 
 SQLite at `data/board.db`. Only board state lives here — everything else is derived
@@ -446,6 +748,9 @@ reshapes are keyed on a `settings` flag so they never fight a later manual edit.
 | `pty.js` | Live terminals — spawn, buffer, multiplex, reap |
 | `review.js` | Sweeps finished sessions into review lanes |
 | `timelog.js` | Working-time reconstruction and netting |
+| `usage.js` | Token spend from transcript `usage` blocks, incrementally |
+| `limits.js` | Plan headroom from Anthropic, via Claude Code's keychain token |
+| `history.js` | Whole-history spend by plan week, cached per transcript on disk |
 | `providers/command.js` | Label index from an external program |
 | `providers/folders.js` | Label index and folder map from disk |
 | `config.js` | Everything specific to one machine |
@@ -453,7 +758,7 @@ reshapes are keyed on a `settings` flag so they never fight a later manual edit.
 | `calendar.js` | EventKit helper, event→label matching |
 | `skills.js` / `agents.js` | Read `~/.claude/skills` and `~/.claude/agents` |
 | `routines.js` | Daily routines and the in-process scheduler |
-| `brief.js` | Locates morning briefs |
+| `brief.js` | Locates morning briefs; owns the one session that writes them |
 | `caffeinate.js` | Display-awake toggle |
 
 ---

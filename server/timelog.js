@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { jsonLines, labelFromPath, readChunk, scanSessions } from './sessions.js';
+import { codexTimeline, isCodexTranscript } from './codex.js';
 import { labelUrl, labelFolder } from './providers/index.js';
 import { config } from './config.js';
 import { listCards } from './db.js';
@@ -39,6 +40,13 @@ function pickLabel(counts) {
 }
 
 function readSession(path) {
+  // Codex records the same two things — when it was working, and which label
+  // folders it wrote into — under a different set of event names.
+  if (isCodexTranscript(path)) {
+    const { stamps, labelWrites } = codexTimeline(path, { maxRead: MAX_READ });
+    return { stamps, label: pickLabel(labelWrites) };
+  }
+
   let stat;
   try {
     stat = statSync(path);

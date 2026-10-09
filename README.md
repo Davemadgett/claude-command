@@ -185,9 +185,22 @@ first" and then dragging it there is the same instruction twice. Only High moves
 and only when you set it: the board is never re-sorted by priority behind your
 back, so wherever you drag a card afterwards is where it stays.
 
+The **⋯** menu also closes a card *until a date*. **Close and bring back →
+Tomorrow / In a week / In a month / Pick a date…** takes the card off the board
+now and returns it to the first column on the morning you chose. It is for work
+that is finished but not settled — something to look at again once the other side
+replies, or when a deadline is closer than it is today.
+
+Unlike a scheduled routine, this backfills. A routine that missed its slot is not
+worth running late, but a card is the opposite: the whole reason you scheduled it
+is that it turns up whether or not the app happened to be open that day. Set one
+for the 1st, open the app on the 5th, and it is waiting for you.
+
 **Archive** — every card you have closed, searchable, with the board and column it
-came from. Closing never deletes; only the archive can delete, and even that
-leaves the Claude transcript untouched.
+came from. Cards with a return date sort to the top and show when they are due,
+so this doubles as the list of what is coming back — *Don't bring back* drops the
+date and leaves the card closed. Closing never deletes; only the archive can
+delete, and even that leaves the Claude transcript untouched.
 
 **Skills** — the skills in `~/.claude/skills`. *Run* opens a session on the board
 and invokes the skill there, so you can watch it and answer its prompts.
@@ -224,12 +237,14 @@ read-only. Hit **Resume here** and the board runs `claude --resume <that id>`,
 which keeps the same session id — so the card, its history and its column follow
 it, and it goes live from that point on.
 
-The mirror opens in **Conversation**: what you asked and what Claude said, with
-the machinery taken out. Tool calls become one plain line each ("Wrote
-report.docx", "Read 9 files"), code blocks collapse to a marker, and the injected
-skill bodies and command caveats that arrive dressed as your own turns are
-dropped. **Technical** puts every call, input and output back, unchanged — the
-filtering is a reading, never an edit.
+The mirror opens in **Chat**: what you asked, in a bubble, and what came back —
+and nothing else. No tool calls, no results, no thinking, not even a tally of
+what was read or written. A turn that ends in a tool call is Claude on its way
+somewhere rather than talking to you, so it isn't shown; where several prose
+turns run together the answer is the last of them, and that is the one you get.
+Code blocks collapse to a marker, and the skill bodies and command caveats that
+arrive dressed as your own turns are dropped. **Technical** puts every call,
+input and output back, unchanged — the filtering is a reading, never an edit.
 
 **Files** lists what a session produced, in two groups. *Written by this session*
 comes from its Write/Edit tool calls and is authoritative. *Also changed while it
@@ -293,7 +308,8 @@ anywhere. *Copy as TSV* gives you rows to work from.
 
 ## Notes
 
-- Light and dark, toggled from the top bar; the terminal palette follows.
+- Light and dark, from **View ▸ Appearance** in the app (a button in the top bar
+  when you run it in a browser instead); the terminal palette follows.
 - The server binds `127.0.0.1` only.
 - Scrolling to the panel avoids `requestAnimationFrame` and doesn't trust
   `behavior: 'smooth'` — a scroll issued from inside a frame callback is dropped

@@ -30,6 +30,10 @@
   --prio-med-bg: #261c0b;
   --prio-low: #64748b;
   --prio-low-bg: #161c28;
+  /* Your own words in the mirror: a tint of the brand, not the brand itself —
+     a saturated bubble behind a paragraph of text is exhausting to read. */
+  --chat-mine-bg: #14301c;
+  --chat-mine-br: #2c5c38;
   --radius: 10px;
   --shadow: 0 8px 24px rgb(0 0 0 / 45%);
   --font: ui-sans-serif, -apple-system, 'SF Pro Text', 'Inter', system-ui, sans-serif;
@@ -66,6 +70,8 @@
   --prio-med-bg: #fdf3e3;
   --prio-low: #64748b;
   --prio-low-bg: #eef1f6;
+  --chat-mine-bg: #e6f2e9;
+  --chat-mine-br: #b9d8c3;
   --shadow: 0 8px 24px rgb(15 23 42 / 14%);
 
   color-scheme: light;
@@ -174,9 +180,16 @@ input:focus, select:focus, textarea:focus {
   padding: 9px 12px; font-size: 13px; font-weight: 550; color: var(--text-dim);
 }
 .board-tab:hover { background: transparent; color: var(--text); }
+.board-tab.dragging { opacity: 0.55; cursor: grabbing; }
 .board-tab.on { color: var(--text); border-bottom-color: var(--accent); }
 .board-tab .x { color: var(--text-faint); margin-left: 7px; font-size: 11px; }
 .board-tab .x:hover { color: var(--danger); }
+/* Quiet on purpose. It says how many are waiting, not that anything is wrong. */
+.board-tab .tab-count {
+  margin-left: 7px; padding: 1px 6px; border-radius: 9px;
+  background: var(--surface-hi); border: 1px solid var(--border);
+  font-size: 10.5px; font-weight: 650; color: var(--text-dim);
+}
 .topbar h1 {
   font-size: 14px;
   font-weight: 620;
@@ -194,6 +207,31 @@ input:focus, select:focus, textarea:focus {
   font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums;
   border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px;
 }
+
+/* Which agent the next session will be. A switch rather than a dropdown so the
+   answer is legible without clicking, sitting immediately left of the button it
+   governs. Both halves are always visible — one lit, one not — because a
+   control that only ever shows the current value looks like a label. */
+.engine-toggle {
+  display: inline-flex; align-items: center; gap: 0;
+  border: 1px solid var(--border); border-radius: 20px; padding: 2px;
+  background: var(--surface);
+}
+.engine-choice {
+  border: 0; background: transparent; padding: 3px 11px; border-radius: 20px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.01em;
+  color: var(--text-faint); white-space: nowrap;
+}
+.engine-choice:hover:not(:disabled):not(.on) { background: var(--surface-hi); color: var(--text-dim); }
+.engine-choice.on {
+  background: var(--surface-hi); color: var(--text);
+  border: 1px solid var(--border-hi); padding: 2px 10px;
+}
+/* Not installed. Shown rather than hidden, so the board never looks like it was
+   only ever built for one of them. */
+.engine-choice:disabled { opacity: 0.4; }
+
+.badge.engine { border-color: var(--border-hi); background: var(--surface-hi); color: var(--text-dim); }
 
 /* ---------------------------------------------------------------- board -- */
 
@@ -266,6 +304,19 @@ input:focus, select:focus, textarea:focus {
   font-size: 13px; font-weight: 550; line-height: 1.35; margin-bottom: 5px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* Your own note, on the card. Clamped to three lines so one long note can't
+   push a column's worth of cards off the screen; click expands it in place. */
+.card-notes {
+  font-size: 11.5px; line-height: 1.45; color: var(--text-dim);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  border-left: 2px solid var(--border-hi); padding: 1px 0 1px 7px;
+  margin: 1px 0 5px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.card-notes.long { cursor: pointer; }
+.card-notes.long:hover { color: var(--text); border-left-color: var(--accent); }
+.card-notes.open { -webkit-line-clamp: unset; }
+
 .card-meta {
   display: flex; align-items: center; gap: 8px; margin-top: 7px;
   font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums;
@@ -305,22 +356,31 @@ input:focus, select:focus, textarea:focus {
 
 /* --------------------------------------------------------------- mirror -- */
 
-.mirror { position: absolute; inset: 0; overflow-y: auto; padding: 14px 18px; }
-.mirror-msg { margin-bottom: 14px; max-width: 900px; }
+.mirror { position: absolute; inset: 0; overflow-y: auto; padding: 16px 22px; }
+/*
+ * The cap is there to stop a line running the full width of an ultrawide display,
+ * where the eye loses its place on the way back to the left. It is deliberately
+ * generous: on any ordinary window the panel is narrower than this and the text
+ * simply fills it, which is the behaviour you want almost all of the time.
+ */
+.mirror-msg { margin-bottom: 16px; max-width: 1400px; }
 .mirror-role {
   font-size: 10.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--text-faint); margin-bottom: 4px; display: flex; gap: 8px; align-items: center;
 }
 .mirror-role.user { color: #93c5fd; }
 .mirror-role.assistant { color: #c4b5fd; }
-.mirror-text { white-space: pre-wrap; line-height: 1.55; font-size: 13px; word-break: break-word; }
+.mirror-text {
+  white-space: pre-wrap; line-height: 1.65; font-size: 15px; word-break: break-word;
+  color: var(--text);
+}
 .mirror-block { margin-top: 6px; }
 .mirror-thinking {
   border-left: 2px solid var(--border-hi); padding-left: 10px;
-  color: var(--text-faint); font-style: italic; font-size: 12px; white-space: pre-wrap; line-height: 1.5;
+  color: var(--text-dim); font-style: italic; font-size: 13.5px; white-space: pre-wrap; line-height: 1.6;
 }
 .mirror-tool {
-  font-family: var(--mono); font-size: 11.5px; background: var(--bg-sunken);
+  font-family: var(--mono); font-size: 12.5px; background: var(--bg-sunken);
   border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px;
   color: var(--text-dim); white-space: pre-wrap; word-break: break-all; line-height: 1.45;
 }
@@ -329,20 +389,37 @@ input:focus, select:focus, textarea:focus {
 .mirror-role .when { color: var(--text-faint); text-transform: none; letter-spacing: 0; font-weight: 500; }
 .mirror-note { color: var(--text-faint); font-size: 11.5px; margin-bottom: 12px; }
 
-/* The reading view. Wider leading and a real measure, because this is meant to
-   be read rather than scanned; the actions sit under the prose as a quiet
-   account of what was done, not as output to be parsed. */
-.mirror-msg.clean { max-width: 760px; margin-bottom: 20px; }
-.mirror-msg.clean .mirror-text { font-size: 13.5px; line-height: 1.62; }
+/* The reading view: a conversation, laid out as one. What you asked sits on the
+   right in a bubble you can find at a glance while scrolling; what came back
+   sits on the left and is meant to be read, so it gets the larger type and the
+   wider leading. Nothing about the work in between appears here at all. */
+.mirror.chat { padding: 16px 26px 40px; }
+.chat-row { display: flex; margin-bottom: 14px; }
+.chat-row.user { justify-content: flex-end; }
+.chat-row.assistant { justify-content: flex-start; }
 
-.mirror-actions {
-  margin-top: 8px; padding-left: 11px;
-  border-left: 2px solid var(--border);
-  display: flex; flex-direction: column; gap: 2px;
+.chat-bubble {
+  position: relative;
+  white-space: pre-wrap; word-break: break-word;
+  padding: 11px 15px 9px; border-radius: 16px;
+  max-width: min(760px, 82%);
 }
-.mirror-actions .did { font-size: 11.5px; color: var(--text-faint); line-height: 1.5; }
-.mirror-actions .did::before { content: '· '; }
-.mirror-actions .did.failed { color: var(--danger); }
+.chat-row.user .chat-bubble {
+  background: var(--chat-mine-bg); border: 1px solid var(--chat-mine-br);
+  color: var(--text); font-size: 14.5px; line-height: 1.55;
+  border-bottom-right-radius: 5px;
+}
+.chat-row.assistant .chat-bubble {
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); font-size: 15.5px; line-height: 1.7;
+  border-bottom-left-radius: 5px;
+  max-width: min(900px, 88%);
+}
+.chat-when {
+  display: block; margin-top: 6px;
+  font-size: 10.5px; color: var(--text-faint); white-space: nowrap;
+}
+.chat-row.user .chat-when { text-align: right; }
 
 .mirror-toolbar {
   display: flex; justify-content: flex-end;
@@ -374,6 +451,200 @@ input:focus, select:focus, textarea:focus {
 .pane-bar .seg button.on { background: var(--surface-hi); color: var(--text); }
 .pane-content { flex: 1 1 auto; position: relative; min-height: 0; }
 .brief iframe { flex: 1 1 auto; border: 0; background: #fff; width: 100%; }
+.brief .pane-content > iframe { position: absolute; inset: 0; height: 100%; }
+
+/* The run's state, in the bar: green while Claude works, amber while it waits
+   on an answer — the one state that matters, since a waiting brief is a brief
+   about to be lost. */
+.badge.wait { color: #fbbf24; border-color: #614a13; background: #2a2008; display: inline-flex; align-items: center; gap: 4px; }
+.badge.wait .pulse { width: 5px; height: 5px; border-radius: 50%; background: #fbbf24; animation: pulse 1.8s ease-in-out infinite; }
+.tab-pulse.wait { background: #fbbf24; animation: pulse 1.8s ease-in-out infinite; }
+
+/* ---------------------------------------------------------------- usage -- */
+
+.usage { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.usage-body { flex: 1 1 auto; overflow-y: auto; padding: 18px 22px 40px; }
+
+/* Three headline windows. Wide enough that a nine-digit token count doesn't
+   wrap, and no wider — they are meant to be read in one glance, together. */
+.u-heads { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; max-width: 1100px; }
+.u-head {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 13px 16px 14px;
+}
+.u-head .l { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+.u-head .n {
+  font-size: 26px; font-weight: 300; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; margin-top: 4px; line-height: 1.1;
+}
+.u-head .c { font-size: 13px; color: var(--text-dim); font-variant-numeric: tabular-nums; margin-top: 1px; }
+.u-head .s { font-size: 10.5px; color: var(--text-faint); margin-top: 7px; line-height: 1.4; }
+
+.u-meter { height: 4px; border-radius: 3px; background: var(--bg-sunken); margin-top: 11px; overflow: hidden; }
+.u-meter span { display: block; height: 100%; background: var(--brand); border-radius: 3px; }
+
+/* One bar per day. Baseline-aligned so the shape of the week reads at a glance. */
+.u-days { display: flex; align-items: flex-end; gap: 3px; height: 30px; margin-top: 9px; }
+.u-days span { flex: 1; background: var(--brand); opacity: 0.55; border-radius: 2px 2px 0 0; min-height: 1px; }
+.u-days span:last-child { opacity: 1; }
+
+.u-section { margin-top: 26px; max-width: 1100px; }
+.u-section h3 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 0 0 3px; display: flex; align-items: center; gap: 8px; }
+.u-count {
+  font-size: 10.5px; font-weight: 650; letter-spacing: 0; text-transform: none;
+  padding: 1px 7px; border-radius: 9px; background: var(--surface-hi);
+  border: 1px solid var(--border); color: var(--text-dim);
+}
+.u-note { font-size: 11.5px; color: var(--text-faint); line-height: 1.55; margin: 0 0 12px; max-width: 720px; }
+.u-quiet { font-size: 12.5px; color: var(--text-faint); padding: 14px 0; }
+
+/* ------------------------------------------------------- billing tab --- */
+/* Reuses .u-section / .tl-stat / table.tl; these are only the parts of the
+   billing panel with no equivalent elsewhere: flags, pings, the approve bar. */
+.bl-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.tl-stat.bl-bad .n { color: #fda4af; }
+.bl-flag {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 650; letter-spacing: 0.03em; white-space: nowrap;
+  color: var(--text-dim); border: 1px solid var(--border);
+}
+.bl-flag.warn { color: #fbbf24; border-color: #614a13; background: #2a2008; }
+.bl-flag.bad { color: #fda4af; border-color: #6b2436; background: #2a1119; }
+.bl-dim td { opacity: 0.45; }
+.bl-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.bl-pings { display: flex; flex-direction: column; }
+.bl-ping {
+  display: flex; align-items: baseline; gap: 10px; padding: 7px 4px;
+  border-bottom: 1px solid var(--border); font-size: 12.5px;
+}
+.bl-ping:hover { background: var(--bg-raised); }
+.bl-sev {
+  flex: 0 0 52px; text-align: center; padding: 1px 0; border-radius: 999px;
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-faint); border: 1px solid var(--border);
+}
+.bl-sev.urgent { color: #fda4af; border-color: #6b2436; background: #2a1119; }
+.bl-sev.high { color: #fbbf24; border-color: #614a13; background: #2a2008; }
+.bl-ping-matter { flex: 0 0 130px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bl-ping-body { flex: 1 1 auto; color: var(--text-dim); line-height: 1.45; }
+.bl-ping-age { flex: 0 0 auto; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* Plan limits. A short stack of labelled bars — the shape /status prints, so
+   it reads the same way in both places. */
+.u-plan {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 13px 16px 14px; max-width: 700px;
+}
+.u-plan.loading { color: var(--text-faint); font-size: 12.5px; }
+.u-plan-row {
+  display: grid; grid-template-columns: 1fr 150px 42px 130px;
+  align-items: center; gap: 12px; padding: 6px 0;
+}
+.u-plan-label { font-size: 12.5px; color: var(--text-dim); display: flex; align-items: center; gap: 7px; }
+.u-plan-row.active .u-plan-label { color: var(--text); font-weight: 550; }
+.u-plan-now {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px; background: var(--brand); color: #04120a;
+}
+.u-plan-bar { height: 6px; border-radius: 4px; background: var(--bg-sunken); overflow: hidden; }
+.u-plan-bar span { display: block; height: 100%; border-radius: 4px; background: var(--brand); transition: width 0.4s ease; }
+.u-plan-bar.sev-warning span { background: #f59e0b; }
+.u-plan-bar.sev-critical span,
+.u-plan-bar.sev-exceeded span { background: var(--danger); }
+.u-plan-pct { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.u-plan-reset { font-size: 11px; color: var(--text-faint); white-space: nowrap; text-align: right; }
+.u-plan-extra {
+  font-size: 11.5px; color: var(--text-dim); margin-top: 9px;
+  padding-top: 9px; border-top: 1px solid var(--border);
+}
+@media (max-width: 700px) {
+  .u-plan-row { grid-template-columns: 1fr 60px; }
+  .u-plan-bar, .u-plan-reset { grid-column: 1 / -1; text-align: left; }
+}
+
+/* Week over week. One column per plan week, oldest at the left. */
+.u-weeks {
+  display: flex; align-items: flex-end; gap: 10px;
+  height: 168px; max-width: 700px; padding: 4px 0 0;
+}
+.u-weeks.loading { align-items: center; color: var(--text-faint); font-size: 12.5px; height: auto; padding: 14px 0; }
+.u-week { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
+.u-week-n {
+  font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-faint);
+  text-align: center; padding-bottom: 5px; white-space: nowrap;
+}
+.u-week.current .u-week-n { color: var(--text); font-weight: 600; }
+.u-week-bar { flex: 1; position: relative; display: flex; align-items: flex-end; }
+.u-week-bar .fill {
+  width: 100%; background: var(--brand); opacity: 0.62;
+  border-radius: 3px 3px 0 0; min-height: 2px; transition: height 0.4s ease;
+}
+.u-week.current .fill { opacity: 1; }
+/* Where this week lands by Friday if it keeps going at this pace. Hollow,
+   because it has not happened. */
+.u-week-bar .proj {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  border: 1px dashed var(--border-hi); border-bottom: 0;
+  border-radius: 3px 3px 0 0; pointer-events: none;
+}
+/* Where last week stood at this same hour — the only fair mark to beat. */
+.u-week-bar .mark {
+  position: absolute; left: -2px; right: -2px; height: 0;
+  border-top: 1px dashed var(--text-faint); pointer-events: none;
+}
+.u-week-l {
+  font-size: 10.5px; color: var(--text-faint); text-align: center;
+  padding-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.u-week.current .u-week-l { color: var(--text-dim); }
+.u-weeks-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px;
+  font-size: 11.5px; color: var(--text-dim); max-width: 700px;
+}
+.u-weeks-legend .up { color: #f59e0b; }
+.u-weeks-legend .down { color: var(--brand); }
+.u-weeks-legend .dim { color: var(--text-faint); }
+
+.u-live { display: flex; flex-direction: column; gap: 2px; }
+.u-live-row {
+  display: flex; align-items: center; gap: 11px; padding: 8px 10px;
+  border: 1px solid transparent; border-radius: 8px;
+}
+.u-live-row:hover { background: var(--bg-raised); border-color: var(--border); }
+.u-live-title {
+  flex: 1; min-width: 0; font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.u-rate { font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; min-width: 74px; text-align: right; }
+.u-rate.dim { color: var(--text-faint); font-weight: 400; min-width: 62px; }
+
+/* Hollow when the session is running somewhere this board didn't start it —
+   its tokens are just as real, but there is no terminal here to open. */
+.u-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  border: 1px solid var(--border-hi); background: transparent;
+}
+.u-dot.on { background: var(--live); border-color: var(--live); box-shadow: 0 0 0 3px rgb(34 197 94 / 15%); }
+
+.u-spark { display: flex; align-items: flex-end; gap: 2px; height: 18px; width: 88px; flex: 0 0 auto; }
+.u-spark span { flex: 1; background: var(--brand); opacity: 0.7; border-radius: 1px; }
+
+.u-models { display: flex; flex-wrap: wrap; gap: 8px; }
+.u-model {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: 9px; padding: 9px 13px; min-width: 210px;
+}
+.u-model .n { font-family: var(--mono); font-size: 11.5px; }
+.u-model .v { font-size: 11px; color: var(--text-faint); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+.u-fine { font-size: 11px; color: var(--text-faint); line-height: 1.6; margin: 30px 0 0; max-width: 760px; }
+.u-fine code { font-family: var(--mono); font-size: 10.5px; }
+
+/* A session is burning tokens behind the tab you aren't looking at. */
+.tab-pulse {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--live);
+  margin-left: 7px; display: inline-block; vertical-align: middle;
+}
 
 /* --------------------------------------------------------------- dialog -- */
 
@@ -447,6 +718,8 @@ input:focus, select:focus, textarea:focus {
 
 .card.manual { border-left-color: #38bdf8; }
 .badge.note { color: #7dd3fc; border-color: #1e4b63; background: #0c2430; }
+/* A closed card with a return date. Amber because it is pending, not finished. */
+.badge.returning { color: #fbbf24; border-color: #614a13; background: #2a2008; }
 
 /* -------------------------------------------------------------- priority --
 
@@ -534,6 +807,17 @@ button.badge.prio.unset:hover .dot { border-color: var(--prio-high); background:
 
 .tab-divider { width: 1px; height: 18px; background: var(--border); margin: 0 8px; }
 
+/* ⌘F. Quiet until typed in; then the count says how much of the board is left. */
+.card-search { display: flex; align-items: center; gap: 8px; margin-right: 6px; }
+.card-search input {
+  width: 150px; padding: 4px 9px; font-size: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  transition: width 120ms ease;
+}
+.card-search input:focus, .card-search.on input { width: 220px; border-color: var(--accent); outline: none; }
+.card-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.card-search .count { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
 /* ------------------------------------------------------------ card menu -- */
 
 .card-menu {
@@ -552,6 +836,11 @@ button.badge.prio.unset:hover .dot { border-color: var(--prio-high); background:
   color: var(--text-faint); padding: 8px 9px 3px; font-weight: 650;
 }
 .card-menu-sep { height: 1px; background: var(--border); margin: 5px 4px; }
+
+/* The inline date field behind "Pick a date…", laid out in one row with its button. */
+.card-menu-date { display: flex; gap: 6px; padding: 3px 5px 5px; }
+.card-menu-date input { flex: 1; min-width: 0; font-size: 12.5px; padding: 5px 7px; }
+.card-menu-date button { width: auto; flex: 0 0 auto; }
 
 /* ---------------------------------------------------------------- files -- */
 
@@ -579,6 +868,8 @@ button.files-head:hover { background: none; color: var(--text-dim); }
 .file-dir { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-size { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.file-src { font-size: 10.5px; color: var(--text-faint); font-style: italic; flex: 0 0 auto; white-space: nowrap; }
+.files-none { font-size: 12px; color: var(--text-faint); padding: 4px 8px 8px; }
 .file-actions { display: flex; gap: 4px; flex: 0 0 auto; opacity: 0; }
 .file-row:hover .file-actions { opacity: 1; }
 .file-actions button { font-size: 11px; padding: 3px 8px; }
@@ -649,6 +940,8 @@ table.tl .sessions { color: var(--text-faint); font-size: 11.5px; line-height: 1
 .src.manual { color: var(--label-fg); border-color: var(--label-br); }
 /* Dashed, because this is the one attribution not backed by work in the folder. */
 .src.prompt { color: var(--prio-med); border-color: var(--prio-med); border-style: dashed; }
+/* The weakest source there is, and drawn that way: a dashed, unemphasised pill. */
+.src.board { border-style: dashed; }
 
 /* --------------------------------------------------------------- agents -- */
 
@@ -744,6 +1037,10 @@ table.tl td.h.dim { color: var(--text-faint); font-weight: 400; }
 .summary-bullets li { font-size: 13.5px; line-height: 1.6; margin-bottom: 7px; }
 .summary-bullets li::marker { color: var(--accent); }
 .summary-empty { font-size: 13px; color: var(--text-faint); margin: 0; }
+.summary-notes {
+  width: 100%; font-size: 13.5px; line-height: 1.6; resize: vertical;
+  font-family: inherit;
+}
 
 .summary-facts { margin: 0; display: grid; grid-template-columns: 130px 1fr; gap: 7px 14px; }
 .summary-facts > div { display: contents; }
@@ -889,6 +1186,9 @@ a.label-link:hover { text-decoration: underline; }
   color: var(--text-faint); white-space: nowrap; flex: 0 0 auto;
 }
 .tile-btn { padding: 2px 6px; font-size: 12px; line-height: 1; }
+/* Only reads as dangerous once you're reaching for it — it isn't destructive,
+   but it does end something, and the row shouldn't be a wall of red. */
+.tile-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
 .tile-term { flex: 1 1 auto; position: relative; min-height: 0; }
 .tile-term .term-host { padding: 6px 2px 2px 8px; }
 

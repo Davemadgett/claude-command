@@ -15,8 +15,9 @@ if you want it.
 - [8. The time log](#8-the-time-log)
 - [9. Calendar](#9-calendar)
 - [10. Reports](#10-reports)
-- [11. Where your data lives](#11-where-your-data-lives)
-- [12. Troubleshooting](#12-troubleshooting)
+- [11. The billing tab](#11-the-billing-tab)
+- [12. Where your data lives](#12-where-your-data-lives)
+- [13. Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -24,14 +25,15 @@ if you want it.
 
 | | | |
 |---|---|---|
-| **Claude Code** | required | The board runs your sessions with the `claude` command. Install it, then run `claude` once in a terminal to sign in. |
+| **Claude Code** and/or **Codex** | at least one | The board runs your sessions with the `claude` or `codex` command. Install one, run it once in a terminal to sign in, and pick which one new sessions use with the switch in the header. [Section 5a](#5a-choosing-an-engine). |
 | **Node 20+** | required | `node -v`. Older majors fail on `better-sqlite3`'s prebuilt binary with an unreadable `NODE_MODULE_VERSION` error. |
 | **macOS 12+** | required | Session discovery is cross-platform, but the terminal, the Finder panel and the calendar helper are Mac-specific. |
 | **Xcode command line tools** | optional | Only for the Mac app and the calendar helper. `xcode-select --install`. |
 
-You do **not** need a Claude API key. The board never calls an API — it starts
-`claude` processes and reads the transcripts Claude Code already writes to
-`~/.claude/projects/`. Your Claude Code sign-in is the only credential involved.
+You do **not** need an API key of any kind. The board never calls an API — it
+starts `claude` or `codex` processes and reads the transcripts those tools
+already write, to `~/.claude/projects/` and `~/.codex/sessions/` respectively.
+Your sign-in to whichever you use is the only credential involved.
 
 ## 2. Install
 
@@ -79,6 +81,30 @@ xcode-select --install     # once, if you don't have it
 open "/Applications/Claude Command.app"
 ```
 
+**⇧⌘N opens another window, ⌘T another tab.** They are all views of the same board, so this is for
+spreading the work across displays — the board on one screen, a session's
+terminal on another. Each window remembers the section it was showing, and the
+whole layout — how many windows, and where each one sat — comes back on the next
+launch.
+
+**The keys.** They are menu items, so they work even while a terminal has the
+keyboard — and they're all "go there", never toggles, so a second press is
+harmless.
+
+| Key | Does |
+| --- | --- |
+| ⌘N | New session |
+| ⌘T | New tab (another view of the board, in this window) |
+| ⇧⌘N | New window |
+| ⌘F | Find a card on the board by name or matter (Esc clears) |
+| ⌘B | Morning Brief |
+| ⇧⌘B | Billing (when configured — see Section 11) |
+| ⌘U | Usage |
+| ⌃⌘F | Full screen |
+
+In a browser (`./start.sh`) ⌘F / ⌘B / ⇧⌘B / ⌘U work the same; ⌘N and ⌘T are
+the browser's own there.
+
 The app owns its server — launching starts it, quitting stops it. If a server
 is already running it attaches to that one instead and leaves it alone on quit,
 so `./start.sh` in a terminal and the app can coexist.
@@ -101,14 +127,73 @@ what you do not need.
 | `bundleId` | `com.example.claudecommand` | macOS bundle identifier. Change it if you fork. |
 | `principal` | `You` | Who sits at the top of the Team org chart. |
 | `port` | `4317` | Server port. `PORT=` in the environment wins. |
+| `engines.<id>.bin` | auto | Where an engine's command lives, when it is somewhere the board would not think to look. [Section 5a](#5a-choosing-an-engine). |
 | `labels.*` | off | Which piece of work a session is about. [Section 6](#6-labels). |
 | `timeLog.postedCommand` | off | Hours already recorded elsewhere. [Section 8](#8-the-time-log). |
 | `calendars.work` | `[]` | Calendars whose events may name a label. [Section 9](#9-calendar). |
 | `reports.dir` | off | A folder of HTML reports to show in the panel. [Section 10](#10-reports). |
+| `billing.db` | off | A billing brain (SQLite) to show as the Billing tab. [Section 11](#11-the-billing-tab). |
 
 Point somewhere else entirely with `CC_CONFIG=/path/to/config.json`.
 
 The server reads `config.json` once at startup, so restart after editing it.
+
+## 5a. Choosing an engine
+
+The switch beside **+ New session** decides which coding agent the next session
+starts as — **Claude** or **Codex**. It is board-wide, and it survives a restart.
+
+It governs everything that opens a terminal: the new-session dialog, *Start
+session* on a hand-written card, a card made from a calendar event, and a
+scheduled routine.
+
+**It does not change anything already on the board.** A card reopens in the
+engine it was started in, whatever the switch says at the time. Codex cards carry
+a small `codex` badge so a mixed board reads at a glance; Claude cards are
+unmarked, because on most boards that is the majority and a badge on every card
+would say nothing.
+
+An engine that is not installed shows greyed out rather than hidden, so the board
+never looks like it was only ever built for one of them.
+
+### If the board can't find `codex`
+
+It asks a login shell first, then checks the usual install locations —
+including `/Applications/ChatGPT.app/Contents/Resources/codex`, which is where
+the ChatGPT desktop app puts it.
+
+That last one matters because the common way to reach that binary is a shell
+alias:
+
+```zsh
+alias codex="/Applications/ChatGPT.app/Contents/Resources/codex"
+```
+
+An alias lives in `.zshrc`, which a non-interactive shell never reads — and a
+spawned process could not run an alias anyway. The board looks in the bundle
+directly for that reason, so an alias setup works without any configuration.
+
+For anything stranger — a version manager, a wrapper script of your own — name
+the path:
+
+```json
+{ "engines": { "codex": { "bin": "/opt/whatever/bin/codex" } } }
+```
+
+### Two things to know about Codex sessions
+
+**Codex takes much longer to accept input.** It starts its MCP servers before the
+composer is live, which on a machine with several connectors runs to twenty
+seconds and more. Typed input before then is dropped, not queued. This only
+matters for scheduled routines, which wait accordingly.
+
+**A codex session isn't identifiable until you send the first message.** Codex
+names its own thread and writes nothing to disk until something is actually said,
+so the board watches for the rollout to appear and attaches it to the card then —
+seconds later, or an hour later, whenever you type. Until that happens the card
+works normally but offers *Start* rather than *Resume*, because there is no
+recorded conversation yet. A session you open and close without saying anything
+never produces one at all, which is correct: there is nothing to reopen.
 
 ## 6. Labels
 
@@ -317,7 +402,59 @@ instead of opening a browser:
 
 The capture group is the date. Leave `dir` null and the tab is hidden.
 
-## 11. Where your data lives
+## 10½. A board's default label
+
+Right-click a board tab to give that board a default label. Any card on the
+board with no label of its own is presumed to be about it — useful for an
+"admin" board where everything bills to the firm's own file. The default is
+the weakest evidence there is: a label you set by hand, a session running in a
+label folder, or a file number typed into the conversation all replace it, and
+a card moved off the board leaves the default behind. Clearing it from a card
+counts as "not this one" and it is not re-applied.
+
+If a slash command produces the report, add `"runCommand": "/morningbrief"` and
+the tab grows a **Run** button. It starts the command in a session the tab
+remembers and shows right there, so a report that asks questions on the way —
+a billing walkthrough, an approval — has one fixed place to be answered, and the
+tab pulses amber while it waits on you. A second click while it is running
+reuses the run rather than starting another; **Start over** is the explicit way
+to get a fresh one, and **Resume** reopens a run that ended early.
+
+## 11. The billing tab
+
+If a billing agent maintains a SQLite brain of invoices, draft time entries,
+open questions, and budgets (the expected tables are in `docs/BILLING.md`),
+point the board at it and the tab appears:
+
+```json
+{
+  "billing": {
+    "db": "~/code/clio-assistant/billing/billing.sqlite",
+    "snapshots": "~/MadgettLawWiki/raw/metlife-snapshots",
+    "runCommand": "/billing",
+    "approveCommand": ["/usr/bin/python3", "~/code/clio-assistant/billing/approve_cli.py"],
+    "label": "Billing"
+  }
+}
+```
+
+Only `db` is required; the rest each switch on one power. The tab always
+*reads*: outstanding bills split into never-issued drafts, awaiting, and
+overdue; the agent's open questions; per-matter budget health (cap, approved
+excess, billed, paid, and the two leaks — over budget, and approved-but-never-
+billed); work seen but never billed. `snapshots` is a folder of carrier-portal
+case exports (`*.psv`, newest wins) joined against the brain to surface portal
+cases no billing profile can name.
+
+`runCommand` gives the tab a Run button and a remembered session, exactly like
+the reports tab — billing questions get one fixed place to be answered, and the
+tab pulses while one waits. `approveCommand` arms the one write: the pending
+time-entry drafts render as a checked table, and **Approve & post** sends the
+selected ids to that command (argv-appended) after a confirm that *is* the
+approval. The command owns the posting policy; the board never touches the
+practice-management system itself.
+
+## 12. Where your data lives
 
 | | |
 |---|---|
@@ -338,16 +475,31 @@ running.
 
 To start over, stop the server and delete `data/board.db`.
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
-**"Claude Code isn't installed yet"** — the board could not find `claude` on
-your PATH or in the usual locations. Install Claude Code and run it once to sign
-in. If it lives somewhere unusual, make sure `command -v claude` works in a
-login shell, which is where the board looks.
+**"Claude Code isn't installed yet" / "Codex isn't installed yet"** — the board
+could not find the command for the engine the switch is set to, on your PATH or
+in the usual locations. Install it and run it once to sign in. If it lives
+somewhere unusual, either make sure `command -v claude` works in a *login* shell
+— which is where the board looks, and which does not read `.zshrc`, so an alias
+will not do — or name the path with `engines.<id>.bin`. See
+[Section 5a](#5a-choosing-an-engine).
 
-**The board is empty** — it shows the last 7 days by default; widen the
-**Window** control in the top bar. Only sessions Claude Code records as
-interactive become cards, so headless automation is filtered out deliberately.
+**A codex card offers *Start* instead of *Resume*** — the board never saw that
+session say anything, so Codex never opened a thread for it and there is nothing
+to resume. Expected for a session opened and closed without a message. If it
+happens to a session you did work in, check `curl 127.0.0.1:4317/api/board` for
+two cards with the same content: the thread was found under its own id instead of
+being attached to the card that started it, and the older card can be archived.
+
+**The board is empty** — new sessions are discovered from the last 7 days of
+transcripts. Anything already on the board stays whatever its age, so this only
+bites on a fresh install; widen it with
+`curl -X PUT 127.0.0.1:4317/api/prefs -H 'content-type: application/json' -d
+'{"sinceDays":30}'`. Only interactive sessions become cards, so headless
+automation is filtered out deliberately — and on the Codex side, so are threads
+belonging to the ChatGPT desktop app, which are that app's windows rather than
+this board's.
 
 **A terminal fails with `posix_spawnp failed`** — npm dropped the exec bit on
 node-pty's `spawn-helper`. `npm install` runs a `postinstall` that restores it;
@@ -369,6 +521,12 @@ else is re-adding them.
 `labels.command` is set, and the server only reads config at startup. Check
 `curl 127.0.0.1:4317/api/labels`, which reports the index, the count and any
 error from your command.
+
+**A card I scheduled to come back hasn't** — returns are swept when the server
+starts and once a minute after that, so a card is never lost, but it can only
+appear once something is running. If the app was closed on the day it was due,
+it is there the next time you open it, at the top of the first column. Anything
+still pending shows its date in the Archive.
 
 **The window is blank or stale** — check the server is up with
 `curl 127.0.0.1:4317/api/board`. Inside the app bundle, server output is

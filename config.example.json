@@ -35,6 +35,8 @@
     "_comment": "Optional. A folder of pre-generated HTML reports to show in the panel. Leave dir null to hide the tab.",
     "dir": null,
     "pattern": "^report_(\\d{4}-\\d{2}-\\d{2})\\.html$",
-    "label": "Reports"
+    "label": "Reports",
+    "_runCommand": "Optional. A slash command that writes the report, e.g. \"/morningbrief\". Adds a Run button to the tab.",
+    "runCommand": null
   }
 }

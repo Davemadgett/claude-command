@@ -1,8 +1,9 @@
 import type {
-  Agents, ArchivedCard, BoardState, BoardTab, Brief, BrowseResult, CalendarEvent,
-  AppConfig, ColumnChoice, CwdSuggestion, LabelFolder,
+  Agents, ArchivedCard, BillingApproveResult, BillingRun, BillingSummary,
+  BoardState, BoardTab, Brief, BriefRun, BrowseResult, CalendarEvent,
+  AppConfig, ColumnChoice, CwdSuggestion, EngineId, EngineStatus, LabelFolder,
   LiveSession, Priority, RecentSession, Routine,
-  SessionFiles, TimeLog, Transcript,
+  SessionFiles, TimeLog, Transcript, Usage, UsageHistory, PlanLimits,
 } from './types';
 
 type Skill = {
@@ -31,14 +32,20 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  /**
+   * `sinceDays` — how far back to look for sessions that aren't on the board
+   * yet — is deliberately not passed. The server's own setting decides it (7
+   * days), because it is a discovery rule rather than a thing to look at: cards
+   * already on the board, hand-written cards, and anything live are shown
+   * whatever their age.
+   */
   board: (opts: {
-    sinceDays: number;
     interactiveOnly: boolean;
     includeArchived: boolean;
     boardId?: string | null;
   }) =>
     req<BoardState>(
-      `/api/board?sinceDays=${opts.sinceDays}&interactiveOnly=${opts.interactiveOnly}` +
+      `/api/board?interactiveOnly=${opts.interactiveOnly}` +
         `&includeArchived=${opts.includeArchived}${opts.boardId ? `&boardId=${opts.boardId}` : ''}`
     ),
 
@@ -53,6 +60,9 @@ export const api = {
 
   renameBoard: (id: string, name: string) =>
     req<{ ok: true }>(`/api/boards/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+
+  setBoardDefaultLabel: (id: string, defaultLabel: string | null) =>
+    req<{ ok: true }>(`/api/boards/${id}`, { method: 'PATCH', body: JSON.stringify({ defaultLabel }) }),
 
   deleteBoard: (id: string) => req<{ movedTo: string }>(`/api/boards/${id}`, { method: 'DELETE' }),
 
@@ -78,6 +88,13 @@ export const api = {
 
   restoreCard: (sessionId: string) =>
     req<{ columnId: string }>(`/api/cards/${sessionId}/restore`, { method: 'POST' }),
+
+  /** Close a card until `wakeAt`, or pass null to cancel a scheduled return. */
+  snoozeCard: (sessionId: string, wakeAt: string | null) =>
+    req<{ wakeAt: string | null }>(`/api/cards/${sessionId}/snooze`, {
+      method: 'POST',
+      body: JSON.stringify({ wakeAt }),
+    }),
 
   /** Permanent. Only offered from inside the archive. */
   deleteCard: (sessionId: string) =>
@@ -148,6 +165,9 @@ export const api = {
   reorderColumns: (ids: string[]) =>
     req<{ ok: true }>('/api/columns/reorder', { method: 'POST', body: JSON.stringify({ ids }) }),
 
+  reorderBoards: (ids: string[]) =>
+    req<{ ok: true }>('/api/boards/reorder', { method: 'POST', body: JSON.stringify({ ids }) }),
+
   transcript: (sessionId: string) =>
     req<Transcript>(`/api/sessions/${sessionId}/transcript?limit=150`),
 
@@ -160,8 +180,8 @@ export const api = {
   stopSession: (sessionId: string) =>
     req<{ stopped: boolean }>(`/api/sessions/${sessionId}/stop`, { method: 'POST' }),
 
-  newSession: (body: { cwd: string; title?: string; columnId?: string }) =>
-    req<{ sessionId: string; pid: number }>('/api/sessions', {
+  newSession: (body: { cwd: string; title?: string; columnId?: string; engine?: EngineId }) =>
+    req<{ sessionId: string; pid: number; engine: EngineId }>('/api/sessions', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -174,6 +194,16 @@ export const api = {
 
   config: () => req<AppConfig>('/api/config'),
 
+  /**
+   * Choose which coding agent new sessions start as. Nothing already on the
+   * board changes — a card reopens in whatever it was started in.
+   */
+  setEngine: (engine: EngineId) =>
+    req<{ engine: EngineId; engines: EngineStatus[] }>('/api/engine', {
+      method: 'POST',
+      body: JSON.stringify({ engine }),
+    }),
+
   resolveDir: (path: string) =>
     req<{ ok: boolean; path?: string; display?: string; label?: string | null; message?: string }>(
       `/api/resolve-dir?path=${encodeURIComponent(path)}`
@@ -182,8 +212,38 @@ export const api = {
   allColumns: () => req<ColumnChoice[]>('/api/columns'),
 
   briefs: () => req<Brief[]>('/api/briefs'),
+  briefRun: () => req<BriefRun | null>('/api/brief/run'),
+  runBrief: (force = false) =>
+    req<BriefRun>('/api/brief/run', { method: 'POST', body: JSON.stringify({ force }) }),
 
-  live: () => req<{ sessions: LiveSession[] }>('/api/live'),
+  billingSummary: () => req<BillingSummary>('/api/billing/summary'),
+  billingRun: () => req<BillingRun | null>('/api/billing/run'),
+  runBilling: (force = false) =>
+    req<BillingRun>('/api/billing/run', { method: 'POST', body: JSON.stringify({ force }) }),
+  /** The click behind this call is the approval — the panel confirms first. */
+  billingApprove: (ids: number[]) =>
+    req<BillingApproveResult>('/api/billing/approve', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+
+  live: () => req<{ sessions: LiveSession[]; rssBytes: number }>('/api/live'),
+
+  /**
+   * Close running sessions. The transcript, the card and the ability to resume
+   * all survive — what ends is the process holding the conversation in memory.
+   */
+  stopSessions: (sessionIds: string[]) =>
+    req<{ stopped: string[]; failed: string[] }>('/api/live/stop', {
+      method: 'POST',
+      body: JSON.stringify({ sessionIds }),
+    }),
+
+  usage: (days: number) => req<Usage>(`/api/usage?days=${days}`),
+
+  limits: () => req<PlanLimits>('/api/limits'),
+
+  history: (weeks: number) => req<UsageHistory>(`/api/history?weeks=${weeks}`),
 
   recent: (limit: number) => req<{ sessions: RecentSession[] }>(`/api/recent?limit=${limit}`),
 

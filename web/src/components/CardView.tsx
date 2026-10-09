@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { api } from '../api';
@@ -63,6 +64,37 @@ type Props = {
 };
 
 /**
+ * A note you wrote, on the card you wrote it on.
+ *
+ * Notes used to be invisible from the board: the only way to read one was to
+ * select the card and wait for its panel, and for a live session that panel
+ * opens the terminal, so the note was two clicks and a tab switch away from the
+ * thing it was written about. A note is the one piece of a card that a person
+ * put there on purpose, which makes it the last thing that should be hidden.
+ *
+ * Three lines by default so a long note can't crowd the board out, and a click
+ * to see the rest in place — the click is stopped here rather than selecting
+ * the card, because you asked to read the note, not to open the session.
+ */
+function CardNotes({ notes }: { notes: string }) {
+  const [open, setOpen] = useState(false);
+  const long = notes.length > 140 || notes.includes('\n');
+  return (
+    <div
+      className={`card-notes${open ? ' open' : ''}${long ? ' long' : ''}`}
+      title={long && !open ? 'Click to read the whole note' : undefined}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (long) setOpen((v) => !v);
+      }}
+    >
+      {notes}
+    </div>
+  );
+}
+
+/**
  * Deliberately spare: a status, where it belongs, what it is, and a way in.
  * Everything else — what Claude did, the transcript, the files — lives one click
  * away in the panel, so cards stay quick to scan and quick to drag.
@@ -116,6 +148,17 @@ export function CardContent({
           </span>
         )}
         {card.manual && <span className="badge note">note</span>}
+        {/*
+          Only Codex is marked. A board that is almost entirely Claude gains
+          nothing from a "Claude" badge on every card — what you need to see is
+          the one that is different, and marking both would cost a badge's width
+          on every card to say what the absence of one already says.
+        */}
+        {card.engine === 'codex' && (
+          <span className="badge engine codex" title="This session is a Codex thread">
+            codex
+          </span>
+        )}
         {card.label ? (
           card.labelUrl ? (
             <a
@@ -161,12 +204,14 @@ export function CardContent({
 
       <div className="card-title">{card.title}</div>
 
+      {card.notes?.trim() && <CardNotes notes={card.notes.trim()} />}
+
       {/*
         A guess, not an answer. It came from a name in what you typed, which is
         the evidence that has been wrong before — so it sits here as a question
         with two ways out, and never quietly becomes the card's label.
       */}
-      {!card.label && card.labelSuggested && onConfirmLabel && (
+      {(!card.label || card.labelSource === 'board') && card.labelSuggested && onConfirmLabel && (
         <div className="card-suggest" onPointerDown={(e) => e.stopPropagation()}>
           <span className="q" title="Detected in what you typed in this session">
             {card.labelSuggested}?

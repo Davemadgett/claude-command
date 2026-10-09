@@ -3,6 +3,15 @@ import { api } from '../api';
 import { relTime } from './CardView';
 import type { ArchivedCard } from '../types';
 
+/** "tomorrow", "in 3 days", "on 12 Aug" — enough to judge without reading a date. */
+function whenBack(iso: string) {
+  const days = Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
+  if (days <= 0) return 'any moment';
+  if (days === 1) return 'tomorrow';
+  if (days < 7) return `in ${days} days`;
+  return `on ${new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short' })}`;
+}
+
 export function ArchiveView({ onRestored, onError }: {
   onRestored: () => void;
   onError: (m: string) => void;
@@ -44,6 +53,19 @@ export function ArchiveView({ onRestored, onError }: {
     }
   };
 
+  /** Drop a scheduled return without reopening the card — it stays closed, for good. */
+  const cancelReturn = async (card: ArchivedCard) => {
+    setBusy(card.sessionId);
+    try {
+      await api.snoozeCard(card.sessionId, null);
+      load(q);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const purge = async (card: ArchivedCard) => {
     if (!confirm(`Permanently delete “${card.title}”?\n\nThis removes the card for good. It does not touch the Claude transcript itself.`)) return;
     setBusy(card.sessionId);
@@ -63,7 +85,8 @@ export function ArchiveView({ onRestored, onError }: {
       <p className="sub">
         Every card you have closed, newest first. Closing never deletes anything — restore puts a
         card back in the column it came from. Deleting for good is only possible from here, and even
-        that removes the card, never the Claude transcript behind it.
+        that removes the card, never the Claude transcript behind it. Cards you closed with a return
+        date sort to the top and come back on their own, whether or not the app was open that day.
       </p>
 
       <div style={{ maxWidth: 420, marginBottom: 16 }}>
@@ -86,6 +109,10 @@ export function ArchiveView({ onRestored, onError }: {
         <>
           <div className="archive-count">
             {q ? `${items.length} of ${total} archived cards` : `${total} archived cards`}
+            {(() => {
+              const due = items.filter((c) => c.wakeAt).length;
+              return due > 0 ? ` · ${due} coming back` : '';
+            })()}
           </div>
 
           {items.map((card) => (
@@ -94,6 +121,7 @@ export function ArchiveView({ onRestored, onError }: {
                 <div className="archive-title">
                   {card.manual && <span className="badge note">note</span>}
                   {card.label && <span className="badge label">{card.label}</span>}
+                  {card.wakeAt && <span className="badge returning">back {whenBack(card.wakeAt)}</span>}
                   {card.title}
                 </div>
                 <div className="archive-meta">
@@ -113,6 +141,16 @@ export function ArchiveView({ onRestored, onError }: {
               </div>
 
               <div className="archive-actions">
+                {card.wakeAt && (
+                  <button
+                    className="ghost"
+                    disabled={busy === card.sessionId}
+                    title={`Scheduled to return ${new Date(card.wakeAt).toLocaleString()}`}
+                    onClick={() => cancelReturn(card)}
+                  >
+                    Don’t bring back
+                  </button>
+                )}
                 <button className="primary" disabled={busy === card.sessionId} onClick={() => restore(card)}>
                   Restore
                 </button>

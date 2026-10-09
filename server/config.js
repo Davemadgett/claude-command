@@ -34,6 +34,19 @@ const DEFAULTS = {
   port: 4317,
 
   /**
+   * Where each coding agent's command lives, when it is somewhere the board
+   * would not think to look.
+   *
+   *   {"engines": {"codex": {"bin": "/opt/whatever/bin/codex"}}}
+   *
+   * Left empty this is unused: the board asks a login shell first and then
+   * checks the usual install locations, which between them cover every ordinary
+   * setup. This is the escape hatch for the ones they don't — a version manager,
+   * a bundled binary, a wrapper script of your own.
+   */
+  engines: {},
+
+  /**
    * Labels are the optional answer to "which piece of work is this session
    * about" — a client, a case, an account, a product line. Two independent
    * questions, deliberately kept apart:
@@ -102,6 +115,32 @@ const DEFAULTS = {
     dir: null,
     pattern: '^report_(\\d{4}-\\d{2}-\\d{2})\\.html$',
     label: 'Reports',
+    // The slash command that writes a report, if one exists. Set it and the
+    // tab grows a Run button that starts the command in a session it keeps —
+    // so a report that asks questions on the way has somewhere to ask them.
+    runCommand: null,
+  },
+
+  /**
+   * The billing tab. Off until `db` points at a billing brain — a SQLite file
+   * something else maintains (see docs/BILLING.md for the expected tables).
+   * The tab reads it; the two optional commands are how it acts:
+   *
+   *   runCommand      slash command that starts the billing agent in a session
+   *                   the tab keeps, like reports.runCommand
+   *   approveCommand  argv that posts approved time-entry draft ids (appended
+   *                   as arguments) and prints a JSON report — the tab's
+   *                   approve button is disabled without it
+   *   snapshots       a folder of carrier-portal case snapshots (*.psv);
+   *                   the newest is joined against the brain to show portal
+   *                   cases no billing profile knows about
+   */
+  billing: {
+    db: null,
+    snapshots: null,
+    runCommand: null,
+    approveCommand: null,
+    label: 'Billing',
   },
 };
 
@@ -144,6 +183,8 @@ function load() {
   const merged = merge(DEFAULTS, user);
   merged.labels.root = expandHome(merged.labels.root);
   merged.reports.dir = expandHome(merged.reports.dir);
+  merged.billing.db = expandHome(merged.billing.db);
+  merged.billing.snapshots = expandHome(merged.billing.snapshots);
   merged.port = Number(process.env.PORT || merged.port);
   merged.configPath = existsSync(path) ? path : null;
   return merged;
