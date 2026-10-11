@@ -532,3 +532,37 @@ still pending shows its date in the Archive.
 `curl 127.0.0.1:4317/api/board`. Inside the app bundle, server output is
 discarded, so `SB_REQLOG=/tmp/req.log` is the way to see what the window is
 actually requesting.
+
+## 14. Keeping it updated on every machine
+
+The repo is the distribution. One machine pushes a fix; every other machine
+pulls it in the background and applies it the next time the app starts, the
+way any other program updates.
+
+```bash
+./app/install-updater.sh          # once per machine
+./app/install-updater.sh --remove
+```
+
+That installs a LaunchAgent (`<bundleId>.updater`) that runs
+`update.sh --if-behind --when-idle` at login and every hour:
+
+- **Nothing happens unless the remote has new commits.** A fetch that finds
+  nothing exits silently.
+- When there are, it pulls, reinstalls dependencies (the native modules are
+  built per machine, for that machine's Node), rebuilds the web bundle, and
+  rebuilds the app bundle in `/Applications`.
+- **It never interrupts you.** With the app owning the server, the new version
+  is on disk and takes effect the next time you open the app. With the server
+  under launchd (an always-on install, see below), it restarts the server only
+  when no session is live; otherwise that too waits for the next start.
+- Log: `~/Library/Logs/<AppName>-updater.log`.
+
+To run the server permanently on a headless or always-on Mac, install a
+LaunchAgent labelled `<bundleId>.server` that runs `node server/index.js` in
+the repo with `KeepAlive`; the app then attaches to it instead of spawning its
+own, and `update.sh` knows to restart that job rather than the app.
+
+A machine that cannot reach the remote (no key yet, no network) just logs the
+failed fetch and tries again next hour. `./update.sh` by hand does the same
+thing immediately, and relaunches.

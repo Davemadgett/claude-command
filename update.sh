@@ -3,16 +3,38 @@
 #
 #   ./update.sh                      pull + rebuild; relaunch the app if it was running
 #   ./update.sh --no-relaunch        pull + rebuild only (a relaunch ends every live session)
+#   ./update.sh --if-behind          do nothing (quietly) unless the remote has new commits
+#   ./update.sh --when-idle          restart the server only if no session is live;
+#                                    otherwise leave the new code on disk for the next launch
 #   CC_TEMPLATE=<file> ./update.sh   also re-render config.json from that template
 #
-# Run it on every machine after a push. node_modules never travels between
-# machines — the native modules (node-pty, better-sqlite3) are built for this
-# Node, on this machine, by npm install.
+# `--if-behind --when-idle` is what the updater LaunchAgent runs at login and
+# every hour (app/install-updater.sh), which is how a fix pushed from one
+# machine reaches the others without anyone typing anything: the code and the
+# app bundle are rebuilt in the background, and take effect the next time the
+# app (or the launchd server) starts — like any other program's update.
+#
+# node_modules never travels between machines — the native modules (node-pty,
+# better-sqlite3) are built for this Node, on this machine, by npm install.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-RELAUNCH=1
-[ "${1:-}" = "--no-relaunch" ] && RELAUNCH=0
+RELAUNCH=1; IF_BEHIND=0; WHEN_IDLE=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-relaunch) RELAUNCH=0 ;;
+    --if-behind) IF_BEHIND=1 ;;
+    --when-idle) WHEN_IDLE=1 ;;
+    *) echo "update.sh: unknown option $arg" >&2; exit 2 ;;
+  esac
+done
+
+if [ "$IF_BEHIND" = 1 ]; then
+  git fetch --quiet || { echo "update: fetch failed ($(git remote get-url origin))" >&2; exit 1; }
+  LOCAL="$(git rev-parse @)"; REMOTE="$(git rev-parse '@{u}')"
+  if [ "$LOCAL" = "$REMOTE" ]; then exit 0; fi
+  echo "update: $(git rev-list --count @..@{u}) new commit(s) on $(git rev-parse --abbrev-ref '@{u}')"
+fi
 
 echo "Pulling…"
 git pull --ff-only
@@ -41,7 +63,16 @@ LAUNCHD_LABEL="$BUNDLE_ID.server"
 # and the only way to load new server code is to relaunch the app.
 if launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; then
   if command -v swiftc >/dev/null 2>&1; then ./app/build.sh; fi
-  if [ "$RELAUNCH" = 1 ]; then
+  if [ "$RELAUNCH" = 1 ] && [ "$WHEN_IDLE" = 1 ]; then
+    LIVE="$(curl -s -m 5 "http://127.0.0.1:$PORT/api/live" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).sessions.length))}catch{process.stdout.write("?")}})' 2>/dev/null || echo "?")"
+    if [ "$LIVE" = "0" ]; then
+      echo "Restarting $LAUNCHD_LABEL (no live sessions)…"
+      launchctl kickstart -k "gui/$(id -u)/$LAUNCHD_LABEL"
+    else
+      echo "New code is on disk; $LIVE live session(s) — the server restarts at its next launch, or: launchctl kickstart -k gui/$(id -u)/$LAUNCHD_LABEL"
+      exit 0
+    fi
+  elif [ "$RELAUNCH" = 1 ]; then
     echo "Restarting $LAUNCHD_LABEL (live sessions end; each is resumable from its card)…"
     launchctl kickstart -k "gui/$(id -u)/$LAUNCHD_LABEL"
   else
@@ -51,6 +82,10 @@ elif command -v swiftc >/dev/null 2>&1; then
   WAS_RUNNING=0
   pgrep -x "$EXEC_NAME" >/dev/null 2>&1 && WAS_RUNNING=1
   ./app/build.sh
+  if [ "$WHEN_IDLE" = 1 ] && [ "$WAS_RUNNING" = 1 ]; then
+    echo "New code is on disk; $APP_NAME picks it up the next time it is opened."
+    exit 0
+  fi
   if [ "$RELAUNCH" = 1 ]; then
     if [ "$WAS_RUNNING" = 1 ]; then
       echo "Relaunching $APP_NAME (live sessions end; each is resumable from its card)…"
