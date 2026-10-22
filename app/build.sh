@@ -37,6 +37,15 @@ APP_NAME="$(read_config appName 'Claude Command')"
 BUNDLE_ID="$(read_config bundleId 'com.example.claudecommand')"
 PORT="${PORT:-$(read_config port 4317)}"
 
+# One version number, from package.json (docs/RELEASING.md). The bundle, the
+# About box and the release tag all read the same field.
+VERSION="$(node -p "require('$REPO/package.json').version")"
+
+# Signing identity. A "Developer ID Application" certificate in the Keychain
+# gives the app a stable identity, so macOS permissions survive a rebuild.
+# Without one we sign ad-hoc, which is fine locally and wrong for a release.
+SIGN_IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')}"
+
 # The executable inside the bundle cannot have spaces in a way that survives
 # every launcher, so strip them: "Claude Command" -> "ClaudeCommand".
 EXEC_NAME="$(printf '%s' "$APP_NAME" | tr -d ' ')"
@@ -78,8 +87,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>${APP_NAME}</string>
   <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
-  <key>CFBundleVersion</key><string>1.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>${EXEC_NAME}</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -108,9 +117,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature: without it macOS treats each rebuild as a different app and
-# re-prompts for permissions.
-codesign --force --deep --sign - "$APP" 2>/dev/null || true
+if [ -n "$SIGN_IDENTITY" ]; then
+  echo "Signing as $SIGN_IDENTITY…"
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements "$HERE/entitlements.plist" \
+    --sign "$SIGN_IDENTITY" "$APP"
+else
+  # Ad-hoc signature: better than none (an unsigned bundle has no identity at
+  # all), but its identity is this build's hash, so each rebuild is a new app
+  # to macOS and permissions granted to the last one stop matching.
+  codesign --force --deep --sign - "$APP" 2>/dev/null || true
+fi
 touch "$APP"
 
-echo "Built $APP"
+echo "Built $APP ($VERSION, $([ -n "$SIGN_IDENTITY" ] && echo 'Developer ID' || echo 'ad-hoc signature'))"

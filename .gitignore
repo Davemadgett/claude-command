@@ -20,3 +20,4 @@ bin/
 
 # Park/resume handoff for a live session; names real matters.
 _SESSION-STATE.md
+.signing/

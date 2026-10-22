@@ -69,3 +69,12 @@ for — the app bundle discards server output otherwise.
 
 Do not open a public issue for anything involving credentials or data exposure.
 Email the address on the commits instead.
+
+## Versions and releases
+
+`package.json` carries the one version number; `app/build.sh` reads it into
+the bundle. Every user-visible change gets a line under `Unreleased` in
+`CHANGELOG.md`, written for the person using the board. A release is a tag
+(`v1.2.0`) plus a signed, notarized zip on GitHub Releases; the procedure,
+including the signing prerequisites and the no-certificate fallback, is
+`docs/RELEASING.md`.
