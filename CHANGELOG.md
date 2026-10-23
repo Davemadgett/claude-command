@@ -11,6 +11,10 @@ Entries describe what changed for the person using the board, not the commit.
 ### Added
 - `CHANGELOG.md`, `docs/RELEASING.md`, and a single version number read from
   `package.json` into the app bundle at build time.
+- Builds are signed with a Developer ID Application certificate and the
+  hardened runtime when the identity is in the Keychain (first signed build
+  2026-10-22). The app's identity is now its Team ID and bundle ID, so macOS
+  permissions granted to it survive a rebuild.
 
 ### Planned
 - The app bundle owns its server: Node, the server, and the web build ship

@@ -36,15 +36,24 @@ without one.
 Prerequisites on the build machine (once):
 
 - Xcode command line tools (`xcode-select --install`).
-- The **Developer ID Application** certificate in the login Keychain. Its
-  private key was generated on the MacBook on 2026-10-21 (request in the
-  repo's git-ignored `.signing/`); the certificate is issued through the Apple
-  Developer account once enrollment is approved. `security find-identity -v -p codesigning`
-  must list it.
+- The **Developer ID Application** certificate in the login Keychain, plus
+  Apple's **Developer ID G2** intermediate (without it the identity shows as
+  "0 valid identities" even though the key and certificate pair). The firm's
+  certificate: `Developer ID Application: David Madgett (37LD23JKD7)`, issued
+  2026-10-22, expires 2027-11-21. Its private key was generated on the MacBook
+  on 2026-10-21; the key, the request, the certificate and the intermediate
+  are kept in the repo's git-ignored `.signing/`. To set up another build
+  machine: export the identity from Keychain Access as a `.p12`, import it
+  there, and import `.signing/DeveloperIDG2CA.cer` too.
+  `security find-identity -v -p codesigning` must report 1 valid identity.
 - Notarization credentials stored once with
-  `xcrun notarytool store-credentials "claude-command-notary" --apple-id <Apple ID> --team-id <TEAMID>`
-  using an app-specific password from appleid.apple.com. The password goes
+  `xcrun notarytool store-credentials "claude-command-notary" --apple-id <Apple ID> --team-id 37LD23JKD7`
+  using an app-specific password from account.apple.com. The password goes
   into the Keychain through that command and nowhere else.
+- Renewal: the certificate expires 2027-11-21. Generate a new request from
+  the existing key (`openssl req -new -key .signing/developer_id.key ...`),
+  create a new Developer ID Application certificate at developer.apple.com,
+  import it, rebuild. The Team ID does not change, so permissions survive.
 
 Then:
 
@@ -81,13 +90,15 @@ The release notes are the changelog section, verbatim.
 - On the server, the always-on job restarts when no session is live.
 - Open the About box on one machine and confirm the version.
 
-## Manual fallback (no CI, no certificate yet)
+## Manual fallback (no CI, no notarization credentials yet)
 
-Until the certificate is issued, a release is the same steps without
-notarization: `./app/build.sh` signs ad-hoc, the zip is attached to the
+The certificate exists since 2026-10-22, so every build on the MacBook is
+Developer ID signed. Until the notarization profile is stored, a release is
+the same steps without `notarytool` and `stapler`: the zip is attached to the
 GitHub release, and the bundle opens on any Mac it is copied to by scp or
-AirDrop (no quarantine flag). A copy downloaded in a browser needs
-"Open Anyway" in Privacy & Security once. Say so in the release notes.
+AirDrop (no quarantine flag). A copy downloaded in a browser is rejected by
+Gatekeeper as "Unnotarized Developer ID" and needs "Open Anyway" in Privacy &
+Security once. Say so in the release notes.
 
 ## CI (planned)
 
