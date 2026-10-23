@@ -8,14 +8,6 @@ Entries describe what changed for the person using the board, not the commit.
 
 ## [Unreleased]
 
-### Added
-- `CHANGELOG.md`, `docs/RELEASING.md`, and a single version number read from
-  `package.json` into the app bundle at build time.
-- Builds are signed with a Developer ID Application certificate and the
-  hardened runtime when the identity is in the Keychain (first signed build
-  2026-10-22). The app's identity is now its Team ID and bundle ID, so macOS
-  permissions granted to it survive a rebuild.
-
 ### Planned
 - The app bundle owns its server: Node, the server, and the web build ship
   inside the bundle, the always-on server is the app's own launch agent, and
@@ -23,6 +15,21 @@ Entries describe what changed for the person using the board, not the commit.
   survive updates. Design: the firm wiki's `mac-onboarding-design`.
 - Signed, notarized releases from GitHub Actions; the background updater
   downloads releases instead of rebuilding from source.
+
+## [1.0.1] — 2026-10-23
+
+The first signed and notarized release. Nothing changes on the board; what
+changes is how the app ships and how macOS treats it.
+
+### Added
+- `CHANGELOG.md`, `docs/RELEASING.md`, and a single version number read from
+  `package.json` into the app bundle at build time.
+- Builds are signed with a Developer ID Application certificate and the
+  hardened runtime when the identity is in the Keychain, and releases are
+  notarized by Apple. The app's identity is now its Team ID and bundle ID
+  instead of a per-build hash, so macOS permissions granted to it (Calendars,
+  folders) survive a rebuild, and a downloaded copy opens without
+  "Open Anyway".
 
 ## [1.0.0] — 2026-10-11
 
@@ -57,6 +64,7 @@ The first version that runs unattended on more than one Mac.
   no-Xcode browser path (`start.sh`), labels from folders or from a command,
   Clio examples, calendar and time-log panels, and the setup guide.
 
-[Unreleased]: https://github.com/Davemadgett/claude-command/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Davemadgett/claude-command/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Davemadgett/claude-command/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Davemadgett/claude-command/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Davemadgett/claude-command/releases/tag/v0.1.0
