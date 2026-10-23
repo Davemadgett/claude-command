@@ -90,10 +90,10 @@ The release notes are the changelog section, verbatim.
 - On the server, the always-on job restarts when no session is live.
 - Open the About box on one machine and confirm the version.
 
-## Manual fallback (no CI, no notarization credentials yet)
+## Manual fallback (notarization unavailable)
 
-The certificate exists since 2026-10-22, so every build on the MacBook is
-Developer ID signed. Until the notarization profile is stored, a release is
+The certificate exists since 2026-10-22 and the notary profile since 2026-10-23 (first notarized release: v1.0.1). Every build on the MacBook is
+Developer ID signed. If the notary service or the profile is unavailable, a release is
 the same steps without `notarytool` and `stapler`: the zip is attached to the
 GitHub release, and the bundle opens on any Mac it is copied to by scp or
 AirDrop (no quarantine flag). A copy downloaded in a browser is rejected by
